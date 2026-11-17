@@ -153,7 +153,9 @@ session.
 Environment:
 - ❌ **Don't `pip install -e` the official Depth-Anything-3 repo.** It pins `numpy<2` and pulls
   `xformers`, which breaks the Kaggle image. The notebooks only put it on `sys.path`.
-- ❌ **Don't change `open3d==0.19.0`.** With 0.20.0 the TSDF meshes come out empty, so F1 = 0.
+- ❌ **Don't ignore the Open3D self-test** (`open3d_check.json`, printed after the install cell). If
+  `legacy_tsdf_ok` is `false`, TSDF fusion is broken in that environment and reconstruction F1 would be
+  wrong. `03_eval` stops automatically; send me the file.
 - ❌ **Don't reinstall or upgrade `torch`.** If a Kaggle image update breaks something, pin the
   notebook environment (Session options > Environment) to the date of a run that worked.
 - ❌ **Don't put large data in `/kaggle/working`** (20 GB output limit). Benchmark zips and raw

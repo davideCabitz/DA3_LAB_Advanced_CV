@@ -129,6 +129,9 @@ def tsdf_mesh(depth, rgb, K, w2c, voxel: float | None = None, depth_trunc: float
         vol.integrate(rgbd, intr, w2c[i])
     mesh = vol.extract_triangle_mesh()
     v, f = np.asarray(mesh.vertices), np.asarray(mesh.triangles)
+    if len(v) == 0 or len(f) == 0:
+        raise RuntimeError(f"Open3D {o3d.__version__} TSDF fusion returned an empty mesh "
+                           "(see scripts/check_open3d.py)")
     c = (np.clip(np.asarray(mesh.vertex_colors), 0, 1) * 255).astype(np.uint8)
     return v, f, c
 

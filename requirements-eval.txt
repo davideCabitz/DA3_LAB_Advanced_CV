@@ -1,7 +1,9 @@
 # Extra dependencies for the benchmark harness (official depth_anything_3.bench, imported from a
-# clone of the official repo) and for TSDF meshing. Verified locally 2026-11-17.
-# open3d 0.20.0's legacy ScalableTSDFVolume returned empty meshes in our test; 0.19.0 works.
-open3d==0.19.0
+# clone of the official repo) and for TSDF meshing.
+# open3d: 0.19.0 only has wheels up to Python 3.12; newer Kaggle images only get 0.20.0. On Windows,
+# 0.20.0's legacy ScalableTSDFVolume returned empty meshes, so every notebook runs
+# scripts/check_open3d.py after installing; it fails loudly if TSDF fusion does not work.
+open3d>=0.19.0
 evo==1.38.1
 addict==2.4.0
 scikit-learn>=1.3

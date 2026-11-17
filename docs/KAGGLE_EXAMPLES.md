@@ -167,7 +167,9 @@ Single images: any photo works; depth is relative (no metric scale).
 
 - ❌ **Don't** `pip install -e` the official Depth-Anything-3 repo in the notebook. It pins `numpy<2`
   and `xformers` and breaks the Kaggle environment. The notebooks only put it on `sys.path`.
-- ❌ **Don't** upgrade `open3d` (pinned to 0.19.0). With 0.20.0 the TSDF mesh comes out empty.
+- ❌ **Don't** ignore the Open3D self-test printed after the install cell. If `legacy_tsdf_ok` is
+  `false`, the mesh is built with a simpler fallback method (`"mesher": "depth-grid"` in
+  `summary.json`). The point cloud is not affected.
 - ❌ **Don't** reinstall `torch`. Use the version shipped with the Kaggle image.
 - ❌ **Don't** turn Internet off. The clone and the weight download need it.
 - ❌ **Don't** write into `/kaggle/input` (read-only), and don't copy large data into

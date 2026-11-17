@@ -184,15 +184,18 @@ def reconstruct(paths, out: Path, args, model, setting, package: bool = True):
     (out / "images").mkdir(exist_ok=True)
     for n, im in zip(names, rgb):
         cv2.imwrite(str(out / "images" / n), cv2.cvtColor(im, cv2.COLOR_RGB2BGR))
-    mesh_info = None
+    mesh_info, mesher = None, "none"
     if args.mesh != "none":
-        try:
-            if args.mesh == "tsdf":
+        v = None
+        if args.mesh == "tsdf":
+            try:
                 v, f, c = tsdf_mesh(depth.numpy(), rgb, K_use.numpy(), w2c_use.numpy())
-            else:
-                raise ImportError
-        except ImportError:
+                mesher = "tsdf"
+            except (ImportError, RuntimeError) as e:  # no Open3D, or a broken TSDF in this Open3D build
+                print(f"[infer] TSDF meshing unavailable ({e}); using depth-grid meshing instead")
+        if v is None:
             v, f, c = depth_mesh(points, rgb, conf, args.conf_percentile)
+            mesher = "depth-grid"
         v = v * np.array([1.0, -1.0, -1.0])  # OpenCV world -> glTF (y up, z towards the viewer)
         mesh_info = write_glb(out / "mesh.glb", v, f, c)
 
@@ -207,7 +210,7 @@ def reconstruct(paths, out: Path, args, model, setting, package: bool = True):
     rot = [float(np.degrees(np.arccos(np.clip((np.trace(a[:3, :3].T @ b[:3, :3]) - 1) / 2, -1, 1))))
            for a, b in zip(w2c_head[0].cpu().numpy(), w2c_ray[0].cpu().numpy())]
     summary = {"views": N, "size_hw": [H, W], "forward_s": dt, "device": args.device, "setting": setting,
-               "weights": args.weights, "points": int(len(P)), "mesh_vertices_faces": mesh_info,
+               "weights": args.weights, "points": int(len(P)), "mesh_vertices_faces": mesh_info, "mesher": mesher,
                "cameras_used": source, "median_rel_diff_points_head_vs_ray": float(np.median(rel)),
                "max_rot_diff_head_vs_ray_deg": max(rot)}
     (out / "summary.json").write_text(json.dumps(summary, indent=2))

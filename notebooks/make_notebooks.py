@@ -36,7 +36,9 @@ if not os.path.exists("/kaggle/working/Depth-Anything-3"):
                     "/kaggle/working/Depth-Anything-3"], check=True)
 subprocess.run(["git", "-C", "/kaggle/working/Depth-Anything-3", "checkout", "{OFFICIAL_COMMIT}"], check=True)
 OFFICIAL_SRC = "/kaggle/working/Depth-Anything-3/src"
-!pip install -q -r requirements-eval.txt'''
+!pip install -q -r requirements-eval.txt
+# Open3D self-test: does TSDF fusion (depth maps -> mesh) work in this environment?
+!python scripts/check_open3d.py --out /kaggle/working/open3d_check.json'''
 
 
 def md(text):
@@ -150,6 +152,11 @@ Data: HF `depth-anything/DA3-BENCH` (HiRoom 0.7 GB, DTU-64 1.8 GB, 7Scenes 3.6 G
 ScanNet++ 10.8 GB, ETH3D 15.1 GB). Limited runs are labelled by `--max-scenes`."""),
         code(SETUP),
         code(OFFICIAL),
+        code('''import json
+chk = json.load(open("/kaggle/working/open3d_check.json"))
+assert chk["legacy_tsdf_ok"], ("Open3D TSDF fusion is broken here, so reconstruction metrics would be wrong. "
+                               "Stop and send open3d_check.json.")
+print("Open3D TSDF OK:", chk["open3d"])'''),
         md("### Our metric code vs the released benchmark functions (should be ~0)"),
         code("!python scripts/check_metrics_vs_official.py --official-src {OFFICIAL_SRC} | tee /kaggle/working/metrics_crosscheck.json"),
         code('''from huggingface_hub import hf_hub_download

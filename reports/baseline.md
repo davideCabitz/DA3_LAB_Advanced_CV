@@ -45,7 +45,7 @@ benchmark harness (loaders, sampling, evo alignment, Open3D TSDF), so the Sec. 6
 | d, t in L_P | ambiguous | predicted rays | couples depth and ray branch |
 | D_C architecture | "lightweight ... transformer", no depth given | 2-layer MLP (release; matches Tab. 8 parameter counts) | open point |
 | Benchmark harness | described in Sec. 6 | released code | protocol identity |
-| Open3D | – | pinned to 0.19.0 | 0.20.0's ScalableTSDFVolume returned empty meshes in our test |
+| Open3D | – | 0.19.0 where possible (Kaggle: 0.20.0) | 0.20.0's ScalableTSDFVolume returned empty meshes on Windows; `check_open3d.py` verifies TSDF on Kaggle |
 
 ## 3. Results
 
@@ -123,7 +123,7 @@ COLMAP text model, previews and a zip including `blender_import.py`.
 - **Sky** (SOH, DA3-BASE has no sky head): the sky gets finite depth and appears as a floating layer
   in the point cloud.
 - **Single shared camera token** (paper text): poses relative to view 0 are not identifiable (§3.5); fixed in the baseline.
-- Open3D 0.20.0: legacy TSDF integration produced empty meshes (pinned to 0.19.0).
+- Open3D 0.20.0 (Windows): legacy TSDF integration produced empty meshes. Kaggle only offers 0.20.0, so TSDF is self-tested there (`scripts/check_open3d.py`).
 
 ## 6. Not done yet
 All remaining compute runs on Kaggle (project rule). Ready but not yet run:
