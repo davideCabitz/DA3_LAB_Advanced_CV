@@ -2,38 +2,34 @@
 
 Legend: [x] done · [~] in progress · [ ] open · [!] waiting for the user (Kaggle run)
 Rules: all compute on Kaggle (docs/BASELINE_RUNBOOK.md); the user commits and pushes.
+Strategy: **baseline = released DA3 weights**; enhancements are measured against them (docs/PLAN.md).
 
-## Phase 0 – Recon
-- [x] Paper read; official code / checkpoints / licenses / benchmark data located (docs/PLAN.md)
-- [x] Decision: own implementation; official repo = reference, parity oracle, benchmark harness
-- [!] Kaggle limits: run `00_setup`, send env_report.json
+## Main track: reproduce the published results with the released weights
+- [x] Paper read; official code / checkpoints / licenses / benchmark data located
+- [x] Our implementation of the released architecture (`da3-*` presets) + key mapping
+- [x] Parity DA3-SMALL / DA3-BASE vs official code (local CPU: depth ≤ 1.9e-5)
+- [x] Benchmark adapter on the released harness; our metrics = official to round-off
+- [!] Kaggle account (phone-verified), repo pushed, notebooks imported (runbook Step 0)
+- [!] `00_setup`: Kaggle limits, 25 unit tests, GPU sanity checks
+- [!] `01_parity` on GPU
+- [!] `03_eval` timing run (HiRoom, 2 scenes)
+- [!] `03_eval` main run: HiRoom, 7Scenes, DTU-64 (all scenes), DA3-SMALL + DA3-BASE
+- [ ] `03_eval` DTU, ScanNet++, ETH3D (one per session, disk permitting)
+- [ ] reports/baseline.md: our numbers vs paper Tab. 2 / Tab. 3, discussion of gaps
+- [ ] optional: DA3-LARGE-1.1 (parity first; CC BY-NC; not the paper's checkpoint)
 
-## Phase 1 – Implementation
-- [x] backbone, Dual-DPT, E_c, D_C, geometry (Eq. 1, Eq. 2), losses, data, configs
-- [x] `paper-*` presets (baseline) vs `da3-*` presets (released, loading only)
-- [x] camera-token decision: reference + shared tokens in the baseline
-- [x] 25 unit tests (passed on local CPU); [!] rerun on Kaggle (`00_setup`)
+## Next: enhancements (against the released weights, one change at a time)
+- [ ] choose the first enhancement (training-free route first)
+- [ ] LoRA / fine-tuning support for the released weights (with-vs-without pairs, 2-3 seeds)
+- [ ] "enhancement experiment" template (config + eval command)
+- [ ] VGGT / Pi3 / DA2 comparisons (not started)
 
-## Phase 2 – Parity
-- [x] key mapping + parity DA3-SMALL / DA3-BASE (local CPU, ≤ 1.9e-5 depth)
-- [!] parity on Kaggle GPU (`01_parity`)
+## Optional: from-scratch reduced-scale training (`paper-*`, for architectural ablations)
+- [x] `paper-*` presets (paper text + reference-view camera token), losses, data converters, train.py
+      (fp16, exact resume, `--time-budget-h`), overfit sanity on CPU
+- [ ] `02_train` on Kaggle: check the DASVO TartanAir layout, then training sessions
 
-## Phase 3 – Reduced-scale training
-- [x] converters (TartanAir w/ App. A cleaning, vKITTI2), reprojection check, token-budget sampler
-- [x] train.py: fp16, grad checkpointing, exact resume, `--time-budget-h`, overfit mode
-- [!] GPU sanity (overfit + resume) in `00_setup`
-- [!] check the DASVO TartanAir layout (first cells of `02_train`), then training sessions
-
-## Phase 4 – Evaluation
-- [x] harness adapter, our metrics (= official to round-off), make_tables.py
-- [!] `03_eval`: HiRoom / 7Scenes / DTU-64 first, then DTU / ScanNet++ / ETH3D
-- [ ] VGGT / Pi3 / DA2 baselines (not started)
-
-## Phase 5 – Demo + Blender
+## Demo
 - [x] infer.py (multi-view and `--per-image` depth + ray maps), exports, blender_import.py
 - [x] headless Blender check (local CPU, ≤ 0.76 px)
-- [!] `04_demo_export` on Kaggle with your photos (docs/KAGGLE_EXAMPLES.md)
-
-## Phase 6 – Report
-- [~] reports/baseline.md: fill in the Kaggle results
-- [x] docs/BASELINE_RUNBOOK.md, docs/KAGGLE_EXAMPLES.md
+- [ ] `04_demo_export` on Kaggle with your photos (docs/KAGGLE_EXAMPLES.md)

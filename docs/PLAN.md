@@ -1,14 +1,27 @@
-# DA3 baseline reproduction plan (Kaggle)
+# DA3 reproduction plan (Kaggle)
 
 Every result is tagged with its setting: **[paper]** (numbers copied from the paper),
 **[official]** (released weights, run by us), **[reduced-scale]** (our training).
 
-## Guiding rule (from the project owner)
-The baseline implements **only what the paper describes**. Where the paper is silent on a detail that
-is needed to build the model, we take it from the authors' release and say so. The released
-architecture differs from the paper text in several places. It is kept as a separate set of presets
-(`da3-*`), used **only** to load the released checkpoints for parity (Phase 2) and for the
-[official] evaluation rows (Phase 4). It is never used for training.
+## Strategy (decided 2026-11-17)
+1. **Baseline = the released DA3 weights** (DA3-SMALL and DA3-BASE, Apache-2.0; DA3-LARGE-1.1 optional).
+   Reproduction = (a) parity: our code gives the released model's outputs, and (b) the Sec. 6
+   benchmark run by us with those weights, compared with Tab. 2 / Tab. 3. Steps: notebooks
+   `00_setup` -> `01_parity` -> `03_eval` (docs/BASELINE_RUNBOOK.md).
+2. **Enhancements are measured against the released weights, one change at a time, same protocol.**
+   Routes in order of preference: training-free changes; fine-tuning the released weights with vs
+   without the change (LoRA or full, same data / steps / seeds; LoRA support planned); a new head on a
+   frozen backbone; from-scratch reduced-scale training (`02_train`, `paper-*` presets) only for
+   backbone-architecture ideas, with several seeds and two sizes, presented as scaled-down ablations.
+3. Training from scratch (`02_train`) is therefore **optional**, not part of the baseline.
+
+## Guiding rule for our own implementation (from the project owner)
+Our trainable model (`paper-*` presets, used by `02_train`) implements **only what the paper
+describes**. Where the paper is silent on a detail that is needed to build the model, we take it from
+the authors' release and say so. The released architecture differs from the paper text in several
+places. It is kept as a separate set of presets (`da3-*`), used to load the released checkpoints:
+parity, the baseline evaluation and, later, fine-tuning experiments on the released weights. It is
+never used for from-scratch training.
 
 ## Official release (checked 2026-11-17)
 - Code: github.com/ByteDance-Seed/Depth-Anything-3, Apache-2.0, commit `3d835ec` (2026-07-27).
@@ -28,12 +41,12 @@ architecture differs from the paper text in several places. It is kept as a sepa
 - Benchmark data: HF `depth-anything/DA3-BENCH` (license tag "other"): HiRoom 0.72 GB, DTU-64 1.78 GB,
   7Scenes 3.55 GB, DTU 8.87 GB, ScanNet++ 10.83 GB, ETH3D 15.1 GB.
 
-## Paper (our baseline, `paper-*` presets) vs released architecture (`da3-*` presets)
+## Paper text (`paper-*` presets, from-scratch training) vs released architecture (`da3-*` presets)
 
-| Aspect | Paper text (baseline) | Released code (loading only) |
+| Aspect | Paper text (`paper-*`) | Released code (`da3-*`) |
 |---|---|---|
 | Layer layout | first L_s within-view, then L_g alternating cross / within, L_s : L_g = 2 : 1 -> ViT-S/B: 8 + 4, ViT-L: 16 + 8 | blocks 0-3 within-view, then alternating from block 4 with cross-view at odd indices (4 + 8) |
-| Camera token | prepended to every view, takes part in all attention; E_c(f, q, t) or **one shared** learnable token (baseline: 2 tokens, see below) | overwrites the cls token at block 4; **two** learnable tokens (reference view, other views) |
+| Camera token | prepended to every view, takes part in all attention; E_c(f, q, t) or **one shared** learnable token (`paper-*`: 2 tokens, see below) | overwrites the cls token at block 4; **two** learnable tokens (reference view, other views) |
 | E_c | "lightweight MLP" | MLP + LayerNorm + 4 transformer blocks across views + LayerNorm |
 | D_C | "lightweight camera head ... transformer" on camera tokens (no depth given) | 2-layer MLP + linear heads (matches Tab. 8 parameter counts; we use it, see below) |
 | Attention | vanilla DINOv2 | + QK-norm and 2D RoPE from block 4 |
@@ -61,9 +74,9 @@ With the paper's **single shared** camera token and no other per-view signal, th
 permutation-equivariant over views. Pose targets are expressed in view 0's frame, so the model
 cannot know which view is view 0. Overfitting one batch on CPU [sanity, synthetic data, 150 steps]:
 camera loss 0.97 with 1 shared token, vs 0.065 with 2 tokens (reference + shared others, as
-released), everything else identical. **Decision (project owner): the `paper-*` baseline uses two
+released), everything else identical. **Decision (project owner): the `paper-*` presets use two
 learnable tokens, [reference view, shared by all other views].** This is the only intentional
-departure from the paper text in the baseline.
+departure from the paper text in `paper-*`.
 
 ## Decision: own implementation, official repo only as reference / oracle / harness
 - **Ours (`src/da3`):** backbone, Dual-DPT, E_c, D_C, geometry (rays, Eq. 1, Eq. 2 DLT + RQ), losses,
@@ -78,7 +91,8 @@ departure from the paper text in the baseline.
 Since 2026-11-17 **every run happens on Kaggle** (project rule); the procedure is in
 `docs/BASELINE_RUNBOOK.md`. Earlier CPU-only checks (unit tests, parity S/B, metric cross-check,
 sanity runs, demo) are recorded in `experiments/local_cpu/` and are rerun on Kaggle by the notebooks.
-Kaggle GPU (T4 / P100): environment check, parity, reduced-scale training (ViT-S, 252-px class,
-2-8 views, fp16 + GradScaler, SDPA, gradient checkpointing, checkpoint every 500 steps, `--resume`,
-`--time-budget-h` to stop before the session limit), and the benchmark. Data lives in `/tmp`;
-outputs in `/kaggle/working` (prepared training data is kept there once, for reuse across sessions).
+Kaggle GPU (T4 / P100), main track: environment check, parity, and the benchmark with the released
+weights (HiRoom / 7Scenes / DTU-64 first, then DTU / ScanNet++ / ETH3D one per session as `/tmp`
+disk allows). Optional: reduced-scale training (ViT-S, 252-px class, 2-8 views, fp16 + GradScaler,
+SDPA, gradient checkpointing, checkpoint every 500 steps, `--resume`, `--time-budget-h` to stop
+before the session limit). Data lives in `/tmp`; outputs in `/kaggle/working`.

@@ -96,8 +96,14 @@ Ideas to explore; each needs an ablation against the reproduced baseline:
 
 Setting tags for every reported number: **[paper]**, **[official]** (released weights run by us), **[reduced-scale]** (our training).
 
-Model presets (`src/da3/config.py`): `paper-*` = the baseline, **only what the paper describes** (used for training);
-`da3-*` = released architecture, used only to load official checkpoints (parity / [official] eval). Differences are tabulated in docs/PLAN.md.
+**Strategy: the baseline is the released DA3 weights** (DA3-SMALL / DA3-BASE): reproduction = parity + Sec. 6 benchmark
+with those weights vs Tab. 2/3 (notebooks 00 -> 01 -> 03). Enhancements are measured against the released weights, one change
+at a time, same protocol (training-free > fine-tune with/without change (LoRA planned) > frozen-backbone head > from-scratch
+reduced-scale ablation). See docs/PLAN.md "Strategy".
+
+Model presets (`src/da3/config.py`): `da3-*` = released architecture, loads the official checkpoints (baseline, parity,
+fine-tuning); `paper-*` = **only what the paper describes** (+ the approved reference-view camera token), used only for
+optional from-scratch training (`02_train`). Differences are tabulated in docs/PLAN.md.
 Evaluation uses the released benchmark harness (pinned clone, commit 3d835ec) with our model plugged in (`src/da3/eval/bench_adapter.py`).
 Pin `open3d==0.19.0` (0.20.0's legacy TSDF returned empty meshes).
 

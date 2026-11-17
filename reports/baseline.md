@@ -1,5 +1,10 @@
 # DA3 baseline reproduction: status report
 
+> **Strategy (2026-11-17): the baseline is the released DA3 weights.** Reproduction = parity (§3.2)
+> + the Sec. 6 benchmark run by us with DA3-SMALL / DA3-BASE vs Tab. 2 / Tab. 3 (§3.4, pending on
+> Kaggle). Enhancements will be measured against the released weights. From-scratch training of the
+> `paper-*` model (§3.5) is optional, for architectural ablations only.
+
 Written for the ACV lab project (reproduce DA3, then improve on it). Status as of 2026-11-17.
 Every number carries its setting: **[paper]** = copied from the paper; **[official]** = released
 weights run by us; **[reduced-scale]** = our training; **[sanity]** = pipeline checks, not results.
@@ -19,10 +24,10 @@ weights run by us; **[reduced-scale]** = our training; **[sanity]** = pipeline c
 | Inference, PLY / transforms.json / COLMAP / GLB export, Blender import | (demo) | `scripts/infer.py`, `export/`, `scripts/blender_import.py` |
 
 Two families of model presets (`src/da3/config.py`):
-- **`paper-*`: the baseline.** Only what the paper describes. Unspecified details are taken from the
+- **`paper-*`: our trainable model** (optional from-scratch training). Only what the paper describes. Unspecified details are taken from the
   release (tapped layers, head widths, activations) or are our stated choices (λ_c = 0.2, predicted
   rays in L_P, AdamW).
-- **`da3-*`: the released architecture.** Used only to load the official checkpoints. It differs from the paper
+- **`da3-*`: the released architecture.** Loads the official checkpoints, i.e. the baseline. It differs from the paper
   text in the layer layout, the camera tokens, QK-norm/RoPE, reference-view selection, head inputs,
   ray resolution, ray confidence and ray channel order (full table in `docs/PLAN.md`).
 

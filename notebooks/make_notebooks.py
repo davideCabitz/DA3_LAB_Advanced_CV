@@ -81,8 +81,9 @@ Setting: **[official]**."""),
         code("!cat /kaggle/working/experiments/parity/*.json | head -80"),
     ],
     "02_train": [
-        md("""# 02 · Reduced-scale training (Phase 3)
-Setting: **[reduced-scale]**. Architecture = `paper-small` (paper as written, except a separate
+        md("""# 02 · OPTIONAL: from-scratch reduced-scale training
+Not part of the baseline (the baseline is the released DA3 weights, see 01 / 03). Use it only for
+backbone-architecture ablations. Setting: **[reduced-scale]**. Architecture = `paper-small` (paper as written, except a separate
 reference-view camera token; see docs/PLAN.md), DINOv2 ViT-S init,
 GT depth only (no teacher), views in [2, 8], constant token budget, warm-up + cosine.
 
@@ -141,7 +142,7 @@ if RESUME_FROM:
         code("!cat experiments/registry.jsonl | tail -3\n!cp experiments/registry.jsonl /kaggle/working/registry.jsonl"),
     ],
     "03_eval": [
-        md("""# 03 · Benchmark evaluation (Phase 4, Sec. 6 protocol)
+        md("""# 03 · Baseline reproduction: Sec. 6 benchmark with the released DA3 weights
 Released benchmark harness (frame sampling seed 42, max 100 frames, evo Umeyama + RANSAC, Open3D
 TSDF, F1 / Chamfer) with **our** model plugged in. Rows: **[official]** = released weights in our
 modules; **[reduced-scale]** = our checkpoint (attach the 02_train output, set `CKPT`).
