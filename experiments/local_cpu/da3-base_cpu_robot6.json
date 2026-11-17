@@ -1,0 +1,134 @@
+{
+  "preset": "da3-base",
+  "setting": "official weights, ours vs official code, fp32",
+  "device": "cpu",
+  "torch": "2.11.0+cpu",
+  "input_shape": [
+    1,
+    6,
+    3,
+    280,
+    504
+  ],
+  "our_load": {
+    "dropped_unused": 42,
+    "missing": [],
+    "unexpected": []
+  },
+  "official_missing_keys": [
+    "head.scratch.output_conv2_aux.1.2.weight",
+    "head.scratch.output_conv2_aux.1.2.bias",
+    "head.scratch.output_conv2_aux.2.2.weight",
+    "head.scratch.output_conv2_aux.2.2.bias",
+    "head.scratch.output_conv2_aux.3.2.weight",
+    "head.scratch.output_conv2_aux.3.2.bias"
+  ],
+  "official_unexpected_keys": [],
+  "modes": {
+    "mono": {
+      "depth_max_abs": 4.649162292480469e-06,
+      "depth_max_rel": 5.8834380070038605e-06,
+      "depth_conf_max_abs": 3.0040740966796875e-05,
+      "ray_max_abs": 4.76837158203125e-07,
+      "ray_conf_max_abs": 0.00020599365234375,
+      "pose_w2c_max_abs": 0.0,
+      "pose_K_max_abs": 0.0,
+      "depth_range": [
+        0.5302397012710571,
+        1.434147596359253
+      ],
+      "ref_index_ours": null
+    },
+    "multiview_unposed": {
+      "depth_max_abs": 8.344650268554688e-06,
+      "depth_max_rel": 9.07906360225752e-06,
+      "depth_conf_max_abs": 0.00011968612670898438,
+      "ray_max_abs": 4.76837158203125e-07,
+      "ray_conf_max_abs": 0.00067138671875,
+      "pose_w2c_max_abs": 2.60770320892334e-08,
+      "pose_K_max_abs": 3.0517578125e-05,
+      "depth_range": [
+        0.3976198434829712,
+        1.4185389280319214
+      ],
+      "ref_index_ours": [
+        4
+      ]
+    },
+    "multiview_posed": {
+      "depth_max_abs": 7.748603820800781e-06,
+      "depth_max_rel": 9.025613508129027e-06,
+      "depth_conf_max_abs": 8.392333984375e-05,
+      "ray_max_abs": 4.76837158203125e-07,
+      "ray_conf_max_abs": 0.00103759765625,
+      "pose_w2c_max_abs": 7.450580596923828e-08,
+      "pose_K_max_abs": 9.1552734375e-05,
+      "depth_range": [
+        0.31559816002845764,
+        1.433754324913025
+      ]
+    }
+  },
+  "ray_pose": {
+    "rot_deg_ours_vs_official_ray": [
+      [
+        0.41306832432746887,
+        0.45197466015815735,
+        0.6391903162002563,
+        0.40926113724708557,
+        0.17245851457118988,
+        0.39067068696022034
+      ]
+    ],
+    "center_diff_ours_vs_official_ray": [
+      [
+        0.00012142346531618387,
+        8.410758891841397e-05,
+        0.0001258793636225164,
+        5.862744365003891e-05,
+        4.0854753024177626e-05,
+        0.0001180228209705092
+      ]
+    ],
+    "fx_ours": [
+      [
+        444.1197814941406,
+        444.8531799316406,
+        442.6820373535156,
+        450.018798828125,
+        451.77752685546875,
+        453.50494384765625
+      ]
+    ],
+    "fx_official_ray": [
+      [
+        444.0783386230469,
+        444.8863525390625,
+        442.7391052246094,
+        450.0172424316406,
+        451.7393493652344,
+        453.4861755371094
+      ]
+    ],
+    "fx_official_cam_head": [
+      [
+        447.7384948730469,
+        446.3445129394531,
+        443.35125732421875,
+        451.56622314453125,
+        454.0538024902344,
+        452.9759521484375
+      ]
+    ],
+    "rot_deg_ours_ray_vs_cam_head": [
+      [
+        0.6218108534812927,
+        0.6477051973342896,
+        0.7641265988349915,
+        0.6477051973342896,
+        0.17245851457118988,
+        0.6519209742546082
+      ]
+    ]
+  }
+}

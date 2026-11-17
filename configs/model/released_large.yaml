@@ -1,0 +1,2 @@
+# Released DA3-LARGE architecture. Only for loading the official checkpoint (parity / [official] eval).
+preset: da3-large

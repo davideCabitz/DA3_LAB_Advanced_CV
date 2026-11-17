@@ -1,0 +1,35 @@
+# [reduced-scale] DA3 baseline training on Kaggle (1x T4/P100, 16 GB).
+# Paper -> here: ViT-L/G 128xH100 200k steps 504px views 2-18  ->  ViT-S 1 GPU, 252px-class, views 2-8.
+experiment: reduced_vits_tartanair_vkitti2
+seed: 0
+out_dir: /kaggle/working/runs
+model:
+  preset: paper-small          # paper architecture (src/da3/config.py)
+  grad_checkpointing: true
+init: {type: dinov2}           # backbone from DINOv2 ViT-S/14 (Sec. 3.2), heads random
+data:
+  sources:
+    - {name: tartanair, root: /tmp/canonical/tartanair, weight: 1.0, max_frame_gap: 4}
+    - {name: vkitti2, root: /tmp/canonical/vkitti2, weight: 1.0, max_frame_gap: 3}
+  # [H, W]: the paper's resolution set scaled by 0.5 (504->252; 189 -> 196 to stay a multiple of 14)
+  resolutions: [[252, 252], [196, 252], [168, 252], [140, 252], [252, 168], [252, 448], [252, 378], [252, 336]]
+  views: [2, 8]
+  token_budget: 6000           # patch tokens per step, kept ~constant via the batch size (Sec. 3.4)
+  max_batch: 8
+  num_workers: 4
+loss:
+  lambda_conf: 0.2             # not specified in the paper
+  point_rays: pred
+train:
+  steps: 20000
+  warmup: 800                  # paper: 8k / 200k = 4% of training
+  lr: 2.0e-4                   # paper peak LR
+  min_lr_ratio: 0.01
+  weight_decay: 0.05
+  grad_clip: 1.0
+  accum: 1
+  amp: fp16                    # T4/P100: no bf16
+  pose_cond_prob: 0.2          # paper
+  ref_strategy: first
+  log_every: 20
+  ckpt_every: 500

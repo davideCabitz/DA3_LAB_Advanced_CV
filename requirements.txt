@@ -1,0 +1,15 @@
+# torch / torchvision / numpy are NOT pinned here: Kaggle images ship a CUDA build and
+# reinstalling it wastes quota. The versions in use are recorded with every run.
+# Pins = versions verified locally (Python 3.11, torch 2.11 CPU) on 2026-11-17.
+einops==0.8.2
+safetensors==0.8.0
+omegaconf==2.4.0
+PyYAML==6.0.3
+trimesh==5.2.1
+plyfile==1.1.5
+pytest==9.0.3
+# Preinstalled on Kaggle; only lower bounds so the image's numpy / TF / protobuf stack stays intact.
+tensorboard>=2.14
+huggingface_hub>=0.34
+scipy>=1.11
+matplotlib>=3.7

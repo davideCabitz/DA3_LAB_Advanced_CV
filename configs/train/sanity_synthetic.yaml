@@ -1,0 +1,25 @@
+# Pipeline sanity check on procedural scenes (small, runs anywhere). Never a reported result.
+experiment: sanity_synthetic_vits
+seed: 0
+out_dir: runs
+model: {preset: paper-small, grad_checkpointing: false}
+init: {type: dinov2}
+data:
+  sources:
+    - {name: synthetic, root: data/synthetic, max_frame_gap: 2}
+  resolutions: [[126, 168]]
+  views: [2, 3]
+  token_budget: 600
+  max_batch: 2
+  num_workers: 0
+loss: {}
+train:
+  steps: 150
+  warmup: 10
+  lr: 2.0e-4
+  min_lr_ratio: 0.1
+  weight_decay: 0.0
+  grad_clip: 1.0
+  pose_cond_prob: 0.2
+  log_every: 10
+  ckpt_every: 50

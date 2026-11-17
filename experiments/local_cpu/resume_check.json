@@ -1,0 +1,6 @@
+{
+  "test": "train 20 steps uninterrupted vs 10 steps + --resume 10 steps (configs/train/sanity_synthetic_cpu.yaml, ckpt_every 10)",
+  "result": "identical losses at steps 11 and 20 (total 4.9624, 3.9265)",
+  "date": "2026-11-17",
+  "device": "cpu"
+}

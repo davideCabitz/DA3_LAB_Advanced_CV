@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "da3"
+version = "0.1.0"
+description = "Reimplementation of Depth Anything 3 (baseline reproduction, ACV lab)"
+requires-python = ">=3.10"
+# torch / torchvision are taken from the environment (Kaggle image or local install).
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

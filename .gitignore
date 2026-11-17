@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+# large artifacts (root-level only, so src/da3/data/ is not ignored)
+/checkpoints/
+/weights/
+/outputs/
+/runs/
+/data/
+*.safetensors
+*.pth
+*.pt
+*.ply
+*.glb
+*.npz
+*.zip

@@ -1,0 +1,2 @@
+# Released DA3-SMALL architecture. Only for loading the official checkpoint (parity / [official] eval).
+preset: da3-small
