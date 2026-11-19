@@ -19,7 +19,8 @@ Strategy: **baseline = released DA3 weights**; enhancements are measured against
 - [ ] optional: DA3-LARGE-1.1 (parity first; CC BY-NC; not the paper's checkpoint)
 
 ## Next: enhancements (against the released weights, one change at a time)
-- [ ] choose the first enhancement (training-free route first)
+- [~] enhancement: motion-robust DA3 (docs/DYNAMIC_SCENES.md §4): C1 pose-conditioned 2nd pass, C2 masked ray-map poses,
+      C3 key-masking study, stretch C4 motion-aware LoRA. Prior-work check 2026-11-19 (Dyna3 already does masks + 4D on DA3)
 - [ ] LoRA / fine-tuning support for the released weights (with-vs-without pairs, 2-3 seeds)
 - [ ] "enhancement experiment" template (config + eval command)
 - [ ] VGGT / Pi3 / DA2 comparisons (not started)

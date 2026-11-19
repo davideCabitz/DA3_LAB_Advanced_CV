@@ -7,6 +7,7 @@ training, the Sec. 6 benchmark, and a Blender-ready reconstruction demo. **All r
 
 - **Run the baseline step by step:** [docs/BASELINE_RUNBOOK.md](docs/BASELINE_RUNBOOK.md)
 - **Run the examples / your own photos (multi-view, depth + ray maps, Blender):** [docs/KAGGLE_EXAMPLES.md](docs/KAGGLE_EXAMPLES.md)
+- **Enhancement idea: DA3 for dynamic scenes (4D):** [docs/DYNAMIC_SCENES.md](docs/DYNAMIC_SCENES.md)
 - Plan, paper-vs-release differences: [docs/PLAN.md](docs/PLAN.md)
 - Results and status: [reports/baseline.md](reports/baseline.md) · tasks: [TODO.md](TODO.md)
 

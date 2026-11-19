@@ -76,6 +76,7 @@ Ideas to explore; each needs an ablation against the reproduced baseline:
 - [docs/PLAN.md](docs/PLAN.md): reproduction plan, official-release findings, and the paper-vs-official-code details we follow.
 - [docs/BASELINE_RUNBOOK.md](docs/BASELINE_RUNBOOK.md): step-by-step Kaggle procedure for the baseline (pass criteria, what not to do).
 - [docs/KAGGLE_EXAMPLES.md](docs/KAGGLE_EXAMPLES.md): examples and personal photos on Kaggle (multi-view, per-image depth + ray maps, Blender).
+- [docs/DYNAMIC_SCENES.md](docs/DYNAMIC_SCENES.md): planned enhancement "motion-robust DA3" for dynamic scenes, with the prior-work check (Dyna3, VGGT4D, ...), what is still open, evaluation protocol and honest-claims list.
 - [TODO.md](TODO.md): running task list for the phases.
 - `src/da3/`: our implementation (installable with `pip install -e .`).
   - `backbone/`: DINOv2 ViT with within-view / cross-view token reordering, RoPE, QK-norm, camera tokens.
