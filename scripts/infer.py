@@ -60,11 +60,14 @@ def load_model(weights: str, device):
     return m.eval().to(device), "reduced-scale"
 
 
-def colorize(d: np.ndarray) -> np.ndarray:
+def colorize(d: np.ndarray, high_is_red: bool = False) -> np.ndarray:
+    """TURBO colour map over the 2-98% range. Depth uses high_is_red=False (near = red, far = blue);
+    confidence uses high_is_red=True (confident = red, uncertain = blue)."""
     v = d[np.isfinite(d)]
     lo, hi = np.percentile(v, 2), np.percentile(v, 98)
     x = np.clip((d - lo) / max(hi - lo, 1e-8), 0, 1)
-    return cv2.cvtColor(cv2.applyColorMap((255 * (1 - x)).astype(np.uint8), cv2.COLORMAP_TURBO), cv2.COLOR_BGR2RGB)
+    x = x if high_is_red else 1 - x
+    return cv2.cvtColor(cv2.applyColorMap((255 * x).astype(np.uint8), cv2.COLORMAP_TURBO), cv2.COLOR_BGR2RGB)
 
 
 def ray_to_rgb(ray: np.ndarray, hw) -> np.ndarray:
@@ -199,10 +202,10 @@ def reconstruct(paths, out: Path, args, model, setting, package: bool = True):
         v = v * np.array([1.0, -1.0, -1.0])  # OpenCV world -> glTF (y up, z towards the viewer)
         mesh_info = write_glb(out / "mesh.glb", v, f, c)
 
-    # ---- preview strip: RGB | depth | ray map (direction) | depth confidence
+    # ---- preview strip: RGB | depth (red = near) | ray map (direction) | depth confidence (red = high)
     k = min(N, 6)
     rows = [np.concatenate([rgb[i], colorize(depth[i].numpy()), ray_to_rgb(ray[i].numpy(), (H, W)),
-                            colorize(np.log(conf[i]))], 1) for i in range(k)]
+                            colorize(np.log(conf[i]), high_is_red=True)], 1) for i in range(k)]
     cv2.imwrite(str(out / "preview.png"), cv2.cvtColor(np.concatenate(rows, 0), cv2.COLOR_RGB2BGR))
 
     # ---- consistency diagnostics (depth + ray vs depth + camera)

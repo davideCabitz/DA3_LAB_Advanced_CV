@@ -216,7 +216,7 @@ print(sets)'''),
 !ls -la {OUT}'''),
         code('''from IPython.display import Image, display
 for name in sets:
-    print(name, "| columns: RGB, depth, ray map (direction), depth confidence")
+    print(name, "| columns: RGB | depth (red = near, blue = far) | ray map (direction as RGB) | depth confidence (red = high, blue = low)")
     display(Image(f"{OUT}/{name}/preview.png", width=1000))
     display(Image(f"{OUT}/{name}/preview_3d.png", width=1000))'''),
         md("### Single images: depth map + ray map per image (N_v = 1)"),

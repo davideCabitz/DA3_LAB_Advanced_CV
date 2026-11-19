@@ -37,7 +37,8 @@ Leave `MY_MULTIVIEW = ""` and `MY_SINGLE = ""`, then **Run All**. The notebook:
 2. downloads **DA3-BASE** (Apache-2.0) from Hugging Face;
 3. reconstructs two example sets: `SOH` (2 photos of the Sydney Opera House) and `robot_unitree`
    (12 frames extracted from the official example video);
-4. shows a preview per set. Columns: RGB | depth | ray map | depth confidence. It also shows a 3D
+4. shows a preview per set. Columns: RGB | depth (red = near, blue = far) | ray map | depth
+   confidence (red = high, blue = low). It also shows a 3D
    view of the points with the cameras in red.
 
 The results are in `/kaggle/working/demo/` (one folder plus one `.zip` per set).
