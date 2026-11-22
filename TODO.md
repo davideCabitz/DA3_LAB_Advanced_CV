@@ -22,7 +22,14 @@ Strategy: **baseline = released DA3 weights**; enhancements are measured against
 Top 3 from the multi-agent study (docs/da3_enhancement_report.md §4–5). Run the gates before writing method code.
 - [ ] Gates (step 1, ~4–6 GPU-h): dump DA3 outputs (with the baseline run), E_c noise probe (read D_C / ray outputs,
       not the returned input poses), uniform-resolution curve, region-zoom oracle on ETH3D, KITTI unposed-vs-posed check
-- [ ] #1 DA3 Self-Audit (training-free): failure detector, per-view head/ray pose source, triple-collocation σ, E_c residual
+- [x] Comparison layer: standard result records (`src/da3/compare/`, `experiments/results/`), notebook `09_compare_all`,
+      `scripts/compare_results.py`; `eval_bench.py` writes a record for every run (docs/ENHANCEMENTS_RUNBOOK.md)
+- [~] #1 DA3 Self-Audit (training-free): implemented (`src/da3/enhancements/self_audit/`, `scripts/self_audit_eval.py`,
+      notebook `05_self_audit`, tests `tests/test_self_audit.py` + `tests/test_compare.py`): failure detector, per-view
+      head/ray pose choice + fusion, triple-collocation σ, E_c residual; the gate dump is part of this run
+  - [!] `00_setup` on Kaggle: the new unit tests must pass (pytest runs all tests)
+  - [!] `05_self_audit` with `MAX_SCENES = 2` (end-to-end check), then `MAX_SCENES = 0`; share `summary.md` + gates
+  - [ ] copy `self_audit/results/*` into `experiments/results/` and commit; fill reports/enhancement_1_self_audit.md
 - [ ] #2 Foveated DA3 (training-free): mixed-resolution routing (bit-exact at equal resolution), cross-scale probe, zoom views
 - [ ] #3 Pose-conditioned self-distillation (LoRA, 1-2 sessions): needs a few KITTI raw drives (user download);
       controls: pose-only LoRA, own-output LoRA, Free Geometry

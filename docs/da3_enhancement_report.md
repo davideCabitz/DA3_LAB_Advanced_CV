@@ -503,6 +503,11 @@ The read level is what the novelty agent actually read: abstract, HTML (full tex
 
 ### 4.2 #1 DA3 Self-Audit: reliability, pose-source choice and calibrated uncertainty without ground truth
 
+> **Status (2026-11-22): implemented, waiting for the Kaggle run.** See notebook `05_self_audit`, [ENHANCEMENTS_RUNBOOK.md](ENHANCEMENTS_RUNBOOK.md) and the results report [reports/enhancement_1_self_audit.md](../reports/enhancement_1_self_audit.md). Changes from the plan below:
+> - pose choice and fusion use the official RANSAC solver, as planned; the custom IRLS solver (G1) is not used because it is published;
+> - pose triple collocation is left for later, because it needs a third pose source that does not share the backbone;
+> - triple collocation uses plain variances with per-triplet outlier trimming, because MAD-based variances are biased for the mixed-confidence partners.
+
 **Idea.** DA3's camera estimates are redundant, and the disagreement between the redundant copies is a free signal of how reliable the prediction is.
 - DA3 predicts every camera twice: once with the camera head D_C and once through the ray map.
 - The ray map has 6 numbers per pixel, far more than an 11-DOF pinhole camera needs.

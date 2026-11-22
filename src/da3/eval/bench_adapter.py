@@ -11,6 +11,10 @@ reproduces the released API's pre/post-processing with our modules:
 * with input poses: E_c conditioning on normalized poses, then Umeyama alignment of the prediction
   to the input poses (RANSAC when >= 10 views, seed 42), depth divided by that scale, and the
   input extrinsics / (resized) intrinsics returned, exactly like `_align_to_input_extrinsics_intrinsics`.
+
+Optional `dumper`: a callable run after each UNPOSED prediction, with access to the raw network
+outputs (e.g. the Self-Audit dump, da3.enhancements.self_audit.AuditDumper). It never changes the
+exported results; without a dumper the adapter behaves exactly as before.
 """
 
 from __future__ import annotations
@@ -29,13 +33,15 @@ from da3.model import DA3
 
 class OursAsOfficialAPI:
     def __init__(self, model: DA3, device: str | torch.device = "cuda", use_ray_pose: bool = False,
-                 process_res: int = 504, amp: bool = True):
+                 process_res: int = 504, amp: bool = True, dumper=None):
         self.model = model.eval().to(device)
         self.device = torch.device(device)
         self.use_ray_pose = use_ray_pose
         self.process_res = process_res
         self.amp = amp and self.device.type == "cuda"
         self.timings = []
+        self.dumper = dumper
+        self._last = None  # raw outputs of the last prediction, kept only when a dumper is set
 
     @torch.no_grad()
     def predict(self, image_files, extrinsics=None, intrinsics=None, ref_view_strategy="first"):
@@ -61,6 +67,8 @@ class OursAsOfficialAPI:
         if self.device.type == "cuda":
             torch.cuda.synchronize()
         self.timings.append((len(image_files), time.time() - t0))
+        if self.dumper is not None and w2c_in is None:
+            self._last = {"x": x, "out": out, "ref": ref_view_strategy}
         pred = {
             "depth": out["depth"][0].float().cpu().numpy(),
             "conf": out["depth_conf"][0].float().cpu().numpy(),
@@ -84,4 +92,7 @@ class OursAsOfficialAPI:
             os.makedirs(os.path.dirname(path), exist_ok=True)
             np.savez_compressed(path, depth=np.round(pred["depth"], 8), conf=np.round(pred["conf"], 2),
                                 extrinsics=pred["extrinsics"], intrinsics=pred["intrinsics"])
+            if self._last is not None:
+                self.dumper(self, self._last["x"], self._last["out"], export_dir, self._last["ref"])
+        self._last = None
         return pred
