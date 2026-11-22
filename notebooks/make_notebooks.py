@@ -1,4 +1,5 @@
-"""Generate the thin Kaggle notebooks (00_setup ... 04_demo_export) from the cell lists below.
+"""Generate the thin Kaggle notebooks (00_setup ... 04_demo_export, 05_self_audit, 09_compare_all)
+from the cell lists below.
 
 All logic lives in src/ and scripts/; notebooks only clone the repo, install pinned deps, attach
 inputs and call scripts. Re-run `python notebooks/make_notebooks.py` after editing this file.
@@ -239,6 +240,134 @@ if sys.version_info[:2] == (3, 11):
         !cat /kaggle/working/demo/{name}/blender_smoke_test.json
 else:
     print("skip: bpy wheels need Python 3.11, this kernel has", sys.version)'''),
+    ],
+    "05_self_audit": [
+        md("""# 05 · Enhancement 1: DA3 Self-Audit, original DA3 vs DA3 + Self-Audit
+Training-free enhancement on the **released** weights (setting **[official]**); the network is not
+changed. DA3 predicts each camera twice (camera head, ray map), over-parameterises it (6-D ray map)
+and can take its own cameras back through E_c: the Self-Audit turns these redundancies into
+reliability information. Plan and novelty: `docs/da3_enhancement_report.md` §4.2; how to run and
+how to save the results: `docs/ENHANCEMENTS_RUNBOOK.md`.
+
+| | Original DA3 | DA3 + Self-Audit |
+|---|---|---|
+| **A. Failure detection** (per view) | its own depth confidence | audit model on the redundancy signals (fitted leave-one-dataset-out) |
+| **B. Pose source** (paper protocol, Sec. 6) | camera-head poses (API default); ray-map poses (official option) | per-view choice / fusion of head and ray poses (+ oracle as upper bound) |
+| **C. Depth uncertainty** (HiRoom, 7Scenes) | confidence calibrated with GT on *other* datasets | per-scene triple collocation, **no GT** |
+
+Settings: **Accelerator = GPU (T4 / P100)**, **Internet = on**. One GPU pass per model (baseline
+benchmark run + Self-Audit dump with one extra E_c pass per scene); everything after that is CPU
+work (signals, harness replays with the same depth and different cameras, TSDF scoring).
+`PHASE = "analyse"` with `RESUME_FROM` re-runs only the analysis (a CPU session is enough).
+Outputs (in `/kaggle/working/`): `self_audit/<tag>/` (summary.md, figures, per_view.csv),
+`self_audit/results/` (standard result records: **copy them into the repo under
+`experiments/results/` and commit**, so notebook 09 can compare all enhancements),
+`self_audit_results.zip`."""),
+        code(SETUP),
+        code(OFFICIAL),
+        code('''import json
+chk = json.load(open("/kaggle/working/open3d_check.json"))
+assert chk["legacy_tsdf_ok"], ("Open3D TSDF fusion is broken here, so reconstruction metrics would be wrong. "
+                               "Stop and send open3d_check.json.")
+print("Open3D TSDF OK:", chk["open3d"])'''),
+        md("### Configuration"),
+        code('''MODELS = ["da3-small", "da3-base"]          # released weights (Apache-2.0)
+DATASETS = ["hiroom", "7scenes", "dtu64"]   # add "eth3d", "scannetpp" in a later session (15 / 11 GB)
+MAX_SCENES = 0        # 0 = all scenes; e.g. 2 for a quick smoke test (labelled "limited")
+PHASE = "all"         # "all" | "infer" (GPU: baseline run + dump) | "analyse" (CPU is enough)
+RESUME_FROM = ""      # output root of an earlier run of this notebook, e.g. "/kaggle/input/<name>"
+WORK = "/kaggle/working/eval_self_audit"    # harness exports + audit dumps
+OUT = "/kaggle/working/self_audit"          # figures, CSV, summaries
+RESULTS = f"{OUT}/results"                  # standard result records (commit these)
+BENCH = "/tmp/da3bench"
+DS = " ".join(DATASETS)
+def tag_for(m):
+    return f"sa_{m}_{'-'.join(DATASETS)}" + (f"_limited{MAX_SCENES}" if MAX_SCENES else "")
+os.makedirs(RESULTS, exist_ok=True)
+if RESUME_FROM:
+    !mkdir -p {WORK} && cp -rn {RESUME_FROM}/eval_self_audit/* {WORK}/
+    !cp -rn {RESUME_FROM}/self_audit/results/* {RESULTS}/ 2>/dev/null; ls {RESULTS}
+print({m: tag_for(m) for m in MODELS})'''),
+        md("### Data: DA3-BENCH subsets (HF `depth-anything/DA3-BENCH`)"),
+        code('''from huggingface_hub import hf_hub_download
+import zipfile
+os.makedirs(BENCH, exist_ok=True)
+for d in DATASETS:
+    if not os.path.exists(f"{BENCH}/{d}"):
+        z = hf_hub_download("depth-anything/DA3-BENCH", f"{d}.zip", repo_type="dataset", local_dir="/tmp/zips")
+        zipfile.ZipFile(z).extractall(BENCH); os.remove(z)
+!du -sh {BENCH}/*'''),
+        md("""### 1 · Original DA3 on the paper protocol + Self-Audit dump (GPU)
+Released harness, camera-head poses (API default). `--dump-audit` also saves, next to each scene's
+export, the ray-map poses (official RANSAC routine and our DLT), a pooled ray map and the E_c
+re-pass (DA3 conditioned on its own cameras). The exported depth / poses are unchanged."""),
+        code('''if PHASE in ("all", "infer"):
+    for m in MODELS:
+        t = tag_for(m)
+        !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
+            --weights official:{m} --datasets {DS} --modes pose recon_unposed --max-scenes {MAX_SCENES} \\
+            --tag {t} --enhancement baseline --variant head --dump-audit --results-root {RESULTS}
+!du -sh {WORK}'''),
+        md("""### 2 · Self-Audit analysis (CPU)
+Signals → per-view GT errors → audit model (leave-one-dataset-out) → A and C metrics, then the
+pose-source variants are written with the **same depth** and scored by the harness (`--eval-only`)."""),
+        code('''if PHASE in ("all", "analyse"):
+    for m in MODELS:
+        t = tag_for(m)
+        !python scripts/self_audit_eval.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
+            --baseline-tag {t} --weights official:{m} --datasets {DS} --max-scenes {MAX_SCENES} \\
+            --results-root {RESULTS} --out-dir {OUT}/{t}'''),
+        md("### 3 · Results: original DA3 vs DA3 + Self-Audit"),
+        code('''from IPython.display import Image, Markdown, display
+for m in MODELS:
+    p = f"{OUT}/{tag_for(m)}/summary.md"
+    display(Markdown(open(p).read()) if os.path.exists(p) else Markdown(f"_missing: {p}_"))'''),
+        code('''import matplotlib.pyplot as plt
+from da3.compare import load_records
+from da3.compare.plots import sec6_delta_bars
+recs = load_records(RESULTS)
+fig, axes = plt.subplots(1, 3, figsize=(18, 4))
+for ax, lab in zip(axes, ["AUC@3", "AUC@30", "F1 w/o p."]):
+    sec6_delta_bars(recs, lab, ax=ax)
+plt.tight_layout(); plt.show()'''),
+        code('''for m in MODELS:
+    for f in ["risk_coverage.png", "depth_reliability.png", "tc_vs_gt_sigma.png", "audit_coefficients.png", "audit_examples.png"]:
+        p = f"{OUT}/{tag_for(m)}/{f}"
+        if os.path.exists(p):
+            print(m, "·", f); display(Image(p, width=1100))'''),
+        md("### 4 · Go/no-go gates (report §4.2)"),
+        code('''for r in load_records(RESULTS):
+    if r["enhancement"] == "self_audit" and "gates" in r["extra"]:
+        print(f"== {r['weights']} ({r['tag']})")
+        for name, g in r["extra"]["gates"].items():
+            print(f"  {g['result']:5s} {name}: {g['value']}")'''),
+        md("### 5 · Save: download `self_audit_results.zip`, copy `self_audit/results/*` into the repo's `experiments/results/`, commit"),
+        code('''!cd /kaggle/working && rm -f self_audit_results.zip && zip -qr self_audit_results.zip self_audit && ls -la self_audit_results.zip
+!find {RESULTS} -name "*.json" | sort'''),
+    ],
+    "09_compare_all": [
+        md("""# 09 · Original DA3 vs all enhancements
+Reads the standard result records (`da3.compare`) of every run: the committed ones in
+`experiments/results/` plus any attached notebook outputs (`/kaggle/input/*/…/results`). Runs are
+only compared when they share weights, datasets, scenes and frame sampling. CPU is enough
+(**Accelerator = None**, **Internet = on** for the clone)."""),
+        code(SETUP),
+        code('''import glob
+RESULT_DIRS = ["experiments/results"] + sorted(set(glob.glob("/kaggle/input/*/results") +
+                                                  glob.glob("/kaggle/input/*/*/results")))
+print(RESULT_DIRS)
+dirs = " ".join(RESULT_DIRS)
+!python scripts/compare_results.py --dirs {dirs} --out /kaggle/working/comparison.md > /dev/null'''),
+        code('''from IPython.display import Markdown, display
+display(Markdown(open("/kaggle/working/comparison.md").read()))'''),
+        code('''import matplotlib.pyplot as plt
+from da3.compare import load_records
+from da3.compare.plots import sec6_delta_bars
+recs = load_records(*RESULT_DIRS)
+fig, axes = plt.subplots(1, 3, figsize=(18, 4))
+for ax, lab in zip(axes, ["AUC@3", "AUC@30", "F1 w/o p."]):
+    sec6_delta_bars(recs, lab, ax=ax)
+plt.tight_layout(); plt.show()'''),
     ],
 }
 

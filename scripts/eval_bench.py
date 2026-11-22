@@ -15,6 +15,16 @@ Data: <bench_root>/{hiroom,7scenes,dtu,dtu64,eth3d,scannetpp} extracted from HF
       --bench-root /tmp/da3bench --work-root /kaggle/working/eval \
       --weights official:da3-small --datasets hiroom 7scenes --modes pose recon_unposed \
       --max-scenes 5 --tag official_da3-small
+
+Outputs: experiments/eval/<tag>.json (legacy summary, read by make_tables.py) and the standard
+result record experiments/results/<enhancement>/<tag>.json (da3.compare; read by notebook
+09_compare_all). `--enhancement/--variant` label the run (default: baseline / head).
+
+Enhancement hooks:
+* `--dump-audit`: also write the Self-Audit dump next to each unposed export (enhancement #1;
+  official RANSAC ray poses + E_c re-pass). The exported results are unchanged.
+* `--eval-only`: score exports that already exist in <work-root>/workspace/evaluation/<tag>
+  (e.g. pose-source variants written by scripts/self_audit_eval.py). No model is loaded.
 """
 
 from __future__ import annotations
@@ -43,6 +53,27 @@ def build_ours(weights: str, device: str):
     model = DA3(state["config"]["model"])
     model.load_state_dict(state["model"])
     return model, "reduced-scale", {"weights": weights, "step": state.get("step"), "meta": state.get("meta")}
+
+
+def official_ray_solver(ray: torch.Tensor, ray_conf: torch.Tensor, hw):
+    """Ray map -> (w2c, K) with the released confidence-weighted RANSAC routine (the code path of
+    the official API's `use_ray_pose=True`). ray: (B, S, h, w, 6) in OUR [origin, direction] order."""
+    from depth_anything_3.utils.ray_utils import get_extrinsic_from_camray
+
+    from da3.camera import affine_inverse
+
+    H, W = hw
+    raw = torch.cat([ray[..., 3:6], ray[..., 0:3]], dim=-1).float()   # released order [direction, origin]
+    torch.manual_seed(0)  # the routine samples RANSAC hypotheses
+    ext, focal, pp = get_extrinsic_from_camray(raw, ray_conf.float(), ray.shape[-3], ray.shape[-2])
+    w2c = affine_inverse(ext)[..., :3, :]
+    K = torch.zeros(w2c.shape[:-2] + (3, 3), dtype=w2c.dtype, device=w2c.device)
+    K[..., 0, 0] = focal[..., 0] / 2 * W
+    K[..., 1, 1] = focal[..., 1] / 2 * H
+    K[..., 0, 2] = pp[..., 0] * W * 0.5
+    K[..., 1, 2] = pp[..., 1] * H * 0.5
+    K[..., 2, 2] = 1.0
+    return w2c, K
 
 
 def cross_check_pose(work_dir: str, data: str, scenes) -> dict:
@@ -74,18 +105,20 @@ def main():
     ap.add_argument("--eval-only", action="store_true")
     ap.add_argument("--tag", required=True)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    # standard result record (da3.compare) and enhancement hooks
+    ap.add_argument("--enhancement", default="baseline")
+    ap.add_argument("--variant", default=None, help="default: 'ray_dlt' with --use-ray-pose, else 'head'")
+    ap.add_argument("--baseline-tag", default=None)
+    ap.add_argument("--setting", default=None, help="default: 'official' for official:* weights, else 'reduced-scale'")
+    ap.add_argument("--results-root", default=str(REPO / "experiments" / "results"))
+    ap.add_argument("--dump-audit", action="store_true", help="write the Self-Audit dump (enhancement #1)")
+    ap.add_argument("--no-repass", action="store_true", help="with --dump-audit: skip the E_c re-pass")
+    ap.add_argument("--notes", default="")
     args = ap.parse_args()
 
-    work_root = Path(args.work_root).resolve()
-    (work_root / "workspace").mkdir(parents=True, exist_ok=True)
-    link = work_root / "workspace" / "benchmark_dataset"
-    if not link.exists():
-        try:
-            os.symlink(Path(args.bench_root).resolve(), link, target_is_directory=True)
-        except OSError:  # Windows without symlink privilege: directory junction
-            import subprocess
+    from da3.eval.harness import prepare_workspace
 
-            subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(Path(args.bench_root).resolve())], check=True)
+    work_root = prepare_workspace(args.work_root, args.bench_root)
     os.chdir(work_root)
     sys.path.insert(0, str(Path(args.official_src).resolve()))
     from depth_anything_3.bench.evaluator import Evaluator  # noqa: E402
@@ -99,11 +132,19 @@ def main():
                    scenes=scenes, ref_view_strategy="first", num_fusion_workers=args.fusion_workers)
 
     t0 = time.time()
-    if args.engine == "ours":
+    api, dumper = None, None
+    if args.eval_only:
+        setting = args.setting or ("official" if args.weights.startswith("official:") else "reduced-scale")
+        winfo = {"weights": args.weights}
+    elif args.engine == "ours":
         from da3.eval.bench_adapter import OursAsOfficialAPI
 
         model, setting, winfo = build_ours(args.weights, args.device)
-        api = OursAsOfficialAPI(model, args.device, use_ray_pose=args.use_ray_pose)
+        if args.dump_audit:
+            from da3.enhancements.self_audit import AuditDumper
+
+            dumper = AuditDumper(ray_solver=official_ray_solver, repass=not args.no_repass)
+        api = OursAsOfficialAPI(model, args.device, use_ray_pose=args.use_ray_pose, dumper=dumper)
     else:
         from depth_anything_3.api import DepthAnything3  # noqa: E402
 
@@ -141,9 +182,22 @@ def main():
     out.write_text(json.dumps(summary, indent=2, default=float))
     append_registry(REPO / "experiments" / "registry.jsonl",
                     {"kind": "eval", **{k: summary[k] for k in ("tag", "setting", "engine", "datasets", "modes", "scenes", "means", "commit")}})
+    from da3.compare import make_record, protocol, save_record
+
+    variant = args.variant or ("ray_dlt" if args.use_ray_pose else "head")
+    record = make_record(
+        enhancement=args.enhancement, variant=variant, tag=args.tag, setting=setting, weights=args.weights,
+        protocol=protocol(args.datasets, scenes or "all", args.max_frames, args.modes, "first"),
+        sec6=summary["means"], sec6_per_scene=metrics, baseline_tag=args.baseline_tag,
+        commit=summary["commit"], env=summary["env"],
+        notes=args.notes + (f" engine={args.engine}" if args.engine != "ours" else ""),
+    )
+    rec_path = save_record(record, args.results_root)
+    if dumper is not None and dumper.failures:
+        print("[WARN] audit dump issues:\n  " + "\n  ".join(dumper.failures))
     print(json.dumps(summary["means"], indent=2, default=float))
     print("cross-check:", cc)
-    print("wrote", out)
+    print("wrote", out, "and", rec_path)
 
 
 if __name__ == "__main__":
