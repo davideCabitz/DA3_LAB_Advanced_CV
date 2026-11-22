@@ -567,6 +567,13 @@ VGGT and π³ have neither two camera decoders nor a pose input, so this is spec
 
 ### 4.3 #2 Foveated DA3: mixed per-view resolutions in one pass
 
+> **Status (2026-11-22): implemented, waiting for the Kaggle run.** See notebook `06_foveated`, [ENHANCEMENTS_RUNBOOK.md](ENHANCEMENTS_RUNBOOK.md) §3 and the results report [reports/enhancement_2_foveated.md](../reports/enhancement_2_foveated.md). Changes from the plan below:
+> - the routing is checked to be bit-identical to the original at equal resolution (unit tests on CPU, GPU check in the notebook) before any experiment;
+> - added a training-free mitigation of the cross-scale risk: attention-mass balancing (log(N_focus / N_view) on the context views' keys in the cross-view blocks, equivalent to replicating their tokens), tested in the probe next to 280-px context views;
+> - region level: the zoom views go through E_c with DA3's own cameras (practical) and with GT cameras (oracle); the gate uses DA3's own cameras;
+> - the Spark3R comparison at equal FLOPs is not run (no public code in this repo); the large-view protocol compares against uniform resolution and fewer views at equal tokens;
+> - the gates below are made precise in a pre-registered analysis plan ([FOVEATED_ANALYSIS_PLAN.md](FOVEATED_ANALYSIS_PLAN.md)): scene-bootstrap CIs, PASS / FAIL / INCONCLUSIVE decisions, margins raised only by a treatment-blind A/A noise floor; gate 1's "collapse" is tested directly as "focus views with vs without the context views".
+
 **Idea.** DA3 runs every view at the same resolution, so the token count grows with views × resolution and the cross-view cost grows quadratically with it. Instead, give a few *focus* views full resolution and many *context* views a quarter of the tokens, all in **one** forward pass. There are two uses:
 - **View level (B2).** Focus views at 504 px, context views at 252 px. Focus views are the ones we care about, or the ones the audit flags. More views fit on a T4, and runs are faster.
 - **Region level (H4).**
