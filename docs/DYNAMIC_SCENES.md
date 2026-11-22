@@ -5,6 +5,17 @@ document have **already been published**, some of them on DA3 itself. The enhanc
 re-scoped to what is still open (§4). Re-run the search right before the exam: this area moves
 fast.
 
+**Update 2026-11-19 (enhancement study, [da3_enhancement_report.md](da3_enhancement_report.md) §3.5).**
+- Feeding external poses into DA3 through E_c is **already published**: ScaRF-SLAM, DAVIO and VIDAR do
+  it, and the official `colmap` mode accepts poses. SpatialBench also reports that DA3 adheres closely
+  to injected poses.
+- C1 below is therefore **no longer a contribution**. It stays only as a cited component of the
+  pipeline.
+- Under the strict rule (anything already implemented is discarded), C3 and C4 apply published
+  mechanisms (key masking; motion-aware fine-tuning), so they count as analysis and application, not
+  as new methods.
+- The DA3-specific method left in this document is C2.
+
 **Goal.** DA3's results on static scenes are already strong (paper Tab. 2-4), and we don't try to
 beat them. We try to **add a capability**. DA3 assumes the world does not move while the photos are
 taken, and the paper lists dynamic scenes as future work (Sec. 8). In a dynamic scene, moving
@@ -15,7 +26,9 @@ Dyna3, separates moving objects from the static background but **uses DA3's raw 
 and in its own tables they are much worse than those of VGGT-based methods (§2.1). Our enhancement
 targets exactly that gap, with tools that only DA3 has:
 1. **Pose-conditioned second pass**: feed the motion-robust poses back into DA3 through its camera
-   encoder E_c. VGGT, DUSt3R and π³ cannot take poses as input. **No prior work found.**
+   encoder E_c. VGGT, DUSt3R and π³ cannot take poses as input. **The mechanism is already
+   published** (ScaRF-SLAM, DAVIO and VIDAR feed external poses into DA3; see the update above). It is
+   kept as a cited component and not claimed.
 2. **Motion-masked ray-map pose recovery**: paper Eq. 1-2 computed on static pixels only.
    **No prior work found** (a small, DA3-specific step).
 3. **Where (and whether) cross-view key masking helps DA3**: a study adapting VGGT4D / Ground4D
@@ -124,7 +137,7 @@ OpenScene, ConceptFusion). **Not a novel direction for us.** At most, a demo.
 | L1 cue A: DA3 depth confidence as motion cue | not found as the main cue (4DVGGT-D uses confidence for depth fusion) | weak alone; at most an auxiliary cue, small novelty |
 | L2 key/value masking in cross-view attention, two passes | **Done for VGGT/DUSt3R** (VGGT4D, Ground4D, 4DVGGT-D, Easi3R); **not for DA3** | adaptation + **layer study on DA3** (C3), cite the mechanism |
 | L2 static-only ray-map pose recovery (Eq. 1-2 on static pixels) | **not found** (Dyna3 uses unmasked ray-map RANSAC; RayMap3R uses ray maps as a *cue*, not masked pose recovery) | **C2, ours** |
-| (new) pose-conditioned second pass through E_c | **not found** (only DA3 has E_c among these backbones; Any4D takes poses as a trained input, not a loop) | **C1, ours: the main contribution** |
+| (new) pose-conditioned second pass through E_c | **Published for static scenes and SLAM** (found 2026-11-19): ScaRF-SLAM, DAVIO and VIDAR feed external poses into DA3 through E_c, and the official `colmap` mode accepts poses. Not tested on dynamic scenes, but the mechanism is the same | **C1: cited component, not a contribution** |
 | L3 static map + per-frame dynamic 4D output | **Done** (Dyna3 on DA3; VGGT4D/Ground4D on VGGT) | demo only (Blender playback), cite Dyna3 |
 | L4 3D scene flow (flow lifting / learned) | **Done** (V-DPM, Any4D, 4RC; FlowCam / GFlow for lifting) | optional demo, cite; addresses Dyna3's "no temporal coherence" limitation only as engineering |
 | L5 motion-aware fine-tuning | **Done for VGGT/DUSt3R** (PAGE-4D, MonST3R); **not for DA3** | stretch C4, clearly a transfer, cite |
@@ -156,7 +169,7 @@ derivable from ground-truth depth + camera + optical flow, e.g. Sintel; PointOdy
 motion annotations; check each dataset). The C1-C3 gains are then separated from mask quality,
 which is not our contribution. This also gives the cleanest scientific statement.
 
-### C1. Pose-conditioned second pass (main contribution, DA3-specific)
+### C1. Pose-conditioned second pass (cited component; the mechanism is already published)
 DA3 accepts known cameras: the encoder `E_c(f, q, t)` turns them into camera tokens that replace the
 learnable token (Sec. 3.2). The paper shows that pose conditioning improves geometry on static
 scenes (Tab. 7, rows f/g). Our idea:
@@ -171,8 +184,16 @@ Questions it answers:
 - Failure mode: pose conditioning was trained on (mostly) static data, so with large movers it may
   behave unexpectedly. Measure it; don't assume.
 
-Why it is new: the training-free dynamic methods in §2.2 run on backbones without a pose input, and
-Dyna3 does not use E_c. Any4D takes poses as one of its trained inputs, which is a different setting.
+Prior work (found 2026-11-19): feeding external poses into DA3 through E_c is already published for
+static scenes and SLAM:
+- ScaRF-SLAM (arXiv 2606.00307);
+- DAVIO (2609.27702);
+- VIDAR (2607.17171), where injection did *worse* than decoupled alignment;
+- the official `colmap` mode.
+
+SpatialBench (2605.27367) reports that DA3 adheres closely to injected poses. C1 is therefore not a
+contribution: we only measure what it does in dynamic scenes. In posed mode the API returns the input
+poses, so read D_C and the ray map directly when testing it.
 
 ### C2. Motion-masked ray-map pose recovery (DA3-specific)
 Paper Eq. 1: camera centre = mean of the ray origins. Eq. 2: R and K from a DLT on the ray directions.
@@ -239,8 +260,6 @@ Rows to report:
 
 ## 6. How to state the contribution honestly
 **Can claim** (as of the 2026-11-19 search):
-- a pose-conditioned second pass that uses DA3's camera encoder to make its geometry consistent
-  with motion-robust cameras (C1);
 - motion-masked ray-map pose recovery for DA3 (C2);
 - the first analysis of cross-view key masking inside DA3, and of camera head vs ray map under
   motion (C3);
@@ -248,6 +267,8 @@ Rows to report:
   principle to DA3.
 
 **Must not claim:**
+- feeding external or motion-robust poses into DA3 through E_c as a new mechanism (**ScaRF-SLAM,
+  DAVIO, VIDAR**); C1 is only a component;
 - motion segmentation on DA3, or the static + per-frame dynamic 4D decomposition (**Dyna3**);
 - attention/key masking for robust poses as a new mechanism (**Easi3R, VGGT4D, Ground4D, 4DVGGT-D**);
 - reprojection-consistency motion masks (**VGGT4D**, classic MVS);
@@ -312,4 +333,5 @@ the baseline work can be reused.
 - V-DPM: [project page](https://www.robots.ox.ac.uk/~vgg/research/vdpm/)
 - FlowCam: arXiv [2306.00180](https://arxiv.org/abs/2306.00180)
 - GFlow: arXiv [2405.18426](https://arxiv.org/abs/2405.18426)
+- Poses fed into DA3 (prior work for C1): ScaRF-SLAM arXiv [2606.00307](https://arxiv.org/abs/2606.00307), DAVIO arXiv [2609.27702](https://arxiv.org/abs/2609.27702), VIDAR arXiv [2607.17171](https://arxiv.org/abs/2607.17171), SpatialBench arXiv [2605.27367](https://arxiv.org/abs/2605.27367)
 - Withdrawn, do not cite: "Depth Anything V4", arXiv [2608.18388](https://arxiv.org/abs/2608.18388)

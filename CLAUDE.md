@@ -70,6 +70,9 @@ Ideas to explore; each needs an ablation against the reproduced baseline:
 - Teacher-label alignment (RANSAC thresholds, per-region alignment) and the 120k-step switch schedule.
 - Dynamic scenes, which the paper lists as future work (Sec. 8).
 
+Selected on 2026-11-19 by a multi-agent study (frozen DA3; strict novelty rule: anything already published is discarded):
+see [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md) §4–5.
+
 ## Repository layout
 
 - [papers/](papers/): reference papers (DA3_Paper.pdf, DINOv2).
@@ -77,6 +80,7 @@ Ideas to explore; each needs an ablation against the reproduced baseline:
 - [docs/BASELINE_RUNBOOK.md](docs/BASELINE_RUNBOOK.md): step-by-step Kaggle procedure for the baseline (pass criteria, what not to do).
 - [docs/KAGGLE_EXAMPLES.md](docs/KAGGLE_EXAMPLES.md): examples and personal photos on Kaggle (multi-view, per-image depth + ray maps, Blender).
 - [docs/DYNAMIC_SCENES.md](docs/DYNAMIC_SCENES.md): planned enhancement "motion-robust DA3" for dynamic scenes, with the prior-work check (Dyna3, VGGT4D, ...), what is still open, evaluation protocol and honest-claims list.
+- [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md): multi-agent enhancement study on a frozen DA3 (35 ideas, clusters and impact, novelty check with references; top 3 = Self-Audit, Foveated DA3, pose-conditioned self-distillation; interactions and implementation order).
 - [TODO.md](TODO.md): running task list for the phases.
 - `src/da3/`: our implementation (installable with `pip install -e .`).
   - `backbone/`: DINOv2 ViT with within-view / cross-view token reordering, RoPE, QK-norm, camera tokens.

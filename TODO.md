@@ -19,9 +19,17 @@ Strategy: **baseline = released DA3 weights**; enhancements are measured against
 - [ ] optional: DA3-LARGE-1.1 (parity first; CC BY-NC; not the paper's checkpoint)
 
 ## Next: enhancements (against the released weights, one change at a time)
-- [~] enhancement: motion-robust DA3 (docs/DYNAMIC_SCENES.md §4): C1 pose-conditioned 2nd pass, C2 masked ray-map poses,
-      C3 key-masking study, stretch C4 motion-aware LoRA. Prior-work check 2026-11-19 (Dyna3 already does masks + 4D on DA3)
-- [ ] LoRA / fine-tuning support for the released weights (with-vs-without pairs, 2-3 seeds)
+Top 3 from the multi-agent study (docs/da3_enhancement_report.md §4–5). Run the gates before writing method code.
+- [ ] Gates (step 1, ~4–6 GPU-h): dump DA3 outputs (with the baseline run), E_c noise probe (read D_C / ray outputs,
+      not the returned input poses), uniform-resolution curve, region-zoom oracle on ETH3D, KITTI unposed-vs-posed check
+- [ ] #1 DA3 Self-Audit (training-free): failure detector, per-view head/ray pose source, triple-collocation σ, E_c residual
+- [ ] #2 Foveated DA3 (training-free): mixed-resolution routing (bit-exact at equal resolution), cross-scale probe, zoom views
+- [ ] #3 Pose-conditioned self-distillation (LoRA, 1-2 sessions): needs a few KITTI raw drives (user download);
+      controls: pose-only LoRA, own-output LoRA, Free Geometry
+- [~] enhancement: motion-robust DA3 (docs/DYNAMIC_SCENES.md §4): C2 masked ray-map poses, C3 key-masking study,
+      stretch C4 motion-aware LoRA. C1 (pose-conditioned 2nd pass) is now only a cited component: the mechanism is
+      published (ScaRF-SLAM, DAVIO, VIDAR). Prior-work check 2026-11-19 (Dyna3 already does masks + 4D on DA3)
+- [ ] LoRA / fine-tuning support for the released weights (with-vs-without pairs, 2-3 seeds); needed by #3
 - [ ] "enhancement experiment" template (config + eval command)
 - [ ] VGGT / Pi3 / DA2 comparisons (not started)
 
