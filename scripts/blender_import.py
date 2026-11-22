@@ -46,10 +46,17 @@ def parse_args():
             opts["point_size"], i = float(argv[i + 1]), i + 1
         i += 1
     if opts["dir"] is None:
-        here = os.path.dirname(os.path.abspath(__file__)) if "__file__" in globals() else ""
-        if not os.path.exists(os.path.join(here, "transforms.json")):
-            here = bpy.path.abspath("//")
-        opts["dir"] = here
+        # Run from Blender's Text Editor, __file__ is only the text-block name ("\blender_import.py"),
+        # so look at the on-disk path of the opened text blocks, then __file__, then the .blend folder.
+        cands = [bpy.path.abspath(t.filepath) for t in bpy.data.texts
+                 if t.filepath and os.path.basename(t.filepath) == "blender_import.py"]
+        if "__file__" in globals():
+            cands.append(os.path.abspath(__file__))
+        cands = [os.path.dirname(c) for c in cands] + [bpy.path.abspath("//")]
+        opts["dir"] = next((c for c in cands if os.path.exists(os.path.join(c, "transforms.json"))), None)
+        if opts["dir"] is None:
+            raise FileNotFoundError("transforms.json not found next to blender_import.py; open the script "
+                                    "from the unzipped folder (Text > Open), or set opts['dir'] by hand")
     return opts
 
 
