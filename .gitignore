@@ -9,6 +9,7 @@ __pycache__/
 /outputs/
 /runs/
 /data/
+/results/
 *.safetensors
 *.pth
 *.pt
