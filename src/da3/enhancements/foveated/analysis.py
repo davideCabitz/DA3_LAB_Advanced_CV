@@ -25,7 +25,9 @@ import numpy as np
 from . import stats as S
 from .metrics import subset_auc
 
-DEPTH_METRICS = ("abs_rel", "delta1", "delta105", "abs_rel_scene")
+DEPTH_METRICS = ("abs_rel", "delta1", "delta105", "abs_rel_scene", "abs_rel_group")
+# pose-error matrix of each AUC flavour: max(RRA, RTA) (the benchmark's), rotation only, translation only
+PAIR_KEYS = {"": "pair_err", "rot": "pair_rot", "trans": "pair_trans"}
 
 
 def load_plan(path) -> dict:
@@ -59,15 +61,28 @@ def row_metric(row: dict, metric: str, part: str, mask) -> float:
     members = np.asarray(row.get("members", np.ones(len(mask), bool)), bool)
     sel = {"focus": mask, "context": ~mask, "all": np.ones_like(mask), "cross": mask}[part] & members
     if metric in DEPTH_METRICS:
+        if metric not in row:   # rows written before the diagnostics existed
+            return float("nan")
         v = np.asarray(row[metric], np.float64)[sel]
         return _nanmean(v)
+    if metric == "scale_ratio":   # diagnostic: median per-view depth scale, context / focus views (1 = consistent)
+        if "scale" not in row:
+            return float("nan")
+        sc = np.asarray(row["scale"], np.float64)
+        f, c = sc[mask & members], sc[~mask & members]
+        f, c = f[np.isfinite(f)], c[np.isfinite(c)]
+        return float(np.median(c) / np.median(f)) if len(f) and len(c) else float("nan")
     if metric in ("tokens", "gflops", "time_s", "peak_mem_gb"):
         return float(row.get(metric, float("nan")))
-    thr = int(metric[3:])
-    E = np.asarray(row["pair_err"], np.float64)
+    base, _, flavour = metric.partition("_")   # "auc30", "auc30_rot", "auc30_trans"
+    thr = int(base[3:])
+    key = PAIR_KEYS[flavour]
+    if key not in row:
+        return float("nan")
+    E = np.asarray(row[key], np.float64)
     res = (subset_auc(E, mask & members, ~mask & members, thresholds=(thr,)) if part == "cross"
            else subset_auc(E, sel, thresholds=(thr,)))
-    return res[metric] if res["pairs"] else float("nan")
+    return res[f"auc{thr:02d}"] if res["pairs"] else float("nan")
 
 
 def index_rows(rows) -> dict:
@@ -254,6 +269,60 @@ def probe_gates(rows, plan) -> dict:
                 "result": S.FAIL, "role": "rescue", "criterion": "",
                 "value": f"no mitigation keeps context AUC@30 within the margin on the dev split ({len(dev)} scenes)"}
     return {"plan_sha256": plan.get("sha256"), "margins": m, "noise_floor": nf, "gates": gates}
+
+
+# ----------------------------------------------------------------------------- exploratory diagnostics
+def _diff(index, plan, test, ref, metric, part, mask_config) -> dict:
+    """Paired difference of scene means (test − ref) in AUC points, scene-bootstrap CI."""
+    bs = plan["bootstrap"]
+    ks, a, b = paired(index, test, ref, metric, part, mask_config)
+    est, lo, hi = S.mean_difference(100 * a, 100 * b, n=bs["n"], seed=bs["seed"], level=plan["ci_level"])
+    return {"test": test, "ref": ref, "metric": f"{metric} ({part})", "estimate": est, "ci_lo": lo, "ci_hi": hi,
+            "scenes": len(ks), "unit": "pts"}
+
+
+def probe_exploratory(rows, plan) -> dict:
+    """Descriptive comparisons added AFTER the limited run of 2026-11-23 (docs/FOVEATED_ANALYSIS_PLAN.md,
+    deviations log). They make no decision and never change a gate:
+    * full-resolution context ceiling for G1b (all views at the focus res vs the focus views alone);
+    * cross-pair (focus–context) pose AUC, with rotation-only and translation-only errors;
+    * one scale per resolution group vs one per scene (are the groups only at different scales?);
+    * context information on the focus grid (diag_up<res>): mismatch of patch scale vs loss of detail;
+    * context-resolution sweep (any foveated configuration beyond the plan's);
+    * the two-pass control (all views at the context res + focus views alone, aligned)."""
+    p = plan["probe"]
+    index = index_rows(rows)
+    present = {c for (_, _, _, c) in index}
+    hi, lo, prim, fo = p["hi"], p["lo"], p["primary"], p["focus_only"]
+    out = {}
+
+    def ratio(label, test, ref, metric, part, mask_cfg):
+        if test in present and ref in present:
+            out[label] = _ratio(index, plan, test, ref, metric, part, mask_cfg)
+
+    def diff(label, test, ref, metric, part, mask_cfg):
+        if test in present and ref in present:
+            out[label] = _diff(index, plan, test, ref, metric, part, mask_cfg)
+
+    ratio(f"G1b ceiling: focus AbsRel, {hi} / focus views alone", hi, fo, "abs_rel", "focus", hi)
+    diff(f"G1b ceiling: focus-pair AUC@30, {hi} − focus views alone", hi, fo, "auc30", "focus", hi)
+    mixed = sorted(c for c in present if c.startswith("fov") and "_random" not in c)
+    for cfg in mixed:
+        diff(f"cross-pair AUC@30, {cfg} − {lo}", cfg, lo, "auc30", "cross", cfg)
+        diff(f"cross-pair AUC@30 rotation only, {cfg} − {lo}", cfg, lo, "auc30_rot", "cross", cfg)
+        diff(f"cross-pair AUC@30 translation only, {cfg} − {lo}", cfg, lo, "auc30_trans", "cross", cfg)
+        ratio(f"AbsRel all views, one scale per group: {cfg} / {lo}", cfg, lo, "abs_rel_group", "all", cfg)
+    for cfg in sorted(c for c in present if c.startswith("diag_up")):
+        diff(f"upsampled context: cross-pair AUC@30, {cfg} − {prim}", cfg, prim, "auc30", "cross", cfg)
+        diff(f"upsampled context: context-pair AUC@30, {cfg} − {prim}", cfg, prim, "auc30", "context", cfg)
+        ratio(f"upsampled context: focus AbsRel, {cfg} / {hi}", cfg, hi, "abs_rel", "focus", cfg)
+    for cfg in sorted(c for c in present if c.startswith("twopass")):
+        ratio(f"two-pass: focus AbsRel, {cfg} / {prim}", cfg, prim, "abs_rel", "focus", cfg)
+        ratio(f"two-pass: focus AbsRel, {cfg} / {hi}", cfg, hi, "abs_rel", "focus", cfg)
+        diff(f"two-pass: cross-pair AUC@30, {cfg} − {prim}", cfg, prim, "auc30", "cross", cfg)
+        diff(f"two-pass: all-pair AUC@30, {cfg} − {prim}", cfg, prim, "auc30", "all", cfg)
+        ratio(f"two-pass: scene-scale AbsRel, {cfg} / {prim}", cfg, prim, "abs_rel_scene", "all", cfg)
+    return out
 
 
 # ----------------------------------------------------------------------------- zoom (G2)

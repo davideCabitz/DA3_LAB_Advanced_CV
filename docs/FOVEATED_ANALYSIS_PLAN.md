@@ -115,4 +115,25 @@ reported, not fixed by changing the unit.
 
 ## Deviations log
 
-_None yet._
+**1. 2026-11-23: limited run inspected before the full run; exploratory diagnostics added.**
+- What happened: a limited end-to-end run of `notebooks/06_foveated` (2 scenes per dataset, Sec. 6
+  pose only, 100 / 250 views) was looked at. Its numbers are in
+  [reports/enhancement_2_foveated.md](../reports/enhancement_2_foveated.md) §4, labelled as a smoke
+  test.
+- What did **not** change: `configs/foveated_analysis.yaml` (same SHA-256), the gates, the primary
+  and secondary configurations, the margins and the rescue rule. The confirmatory decisions are read
+  from the full run (`MAX_SCENES = 0`) exactly as specified above.
+- What was added after seeing the limited run. Everything below is **exploratory**: descriptive, CIs
+  only, no decision, reported in a separate block of `summary.md` and in columns marked `*`.
+  - Cross-pair pose AUC (focus–context pairs), with rotation-only and translation-only errors. The
+    limited run suggested this is the largest effect, and no gate covers it.
+  - Per-view depth scale and AbsRel with one scale per resolution group.
+  - The full-resolution context ceiling next to G1b (all views at 504 px vs the focus views alone).
+  - Context views with 252-px detail on the 504-px grid (`diag_up252`), to tell a patch-scale
+    mismatch from lost detail.
+  - A context-resolution sweep (336 / 378 px), never gated.
+  - The two-pass control (all views at 252 px + the focus views alone at 504 px, aligned on the focus
+    cameras), in the probe and in the large-view protocol.
+- Sec. 6 runs pose only (no TSDF / F1). The limited run showed that the two resolution groups come out
+  at different depth scales, so fusing them would mostly measure that. F1 stays a descriptive
+  quantity of the plan; it is not reported for this enhancement.

@@ -170,3 +170,51 @@ def test_plan_is_consistent_with_the_probe_defaults():
     subs = fe.subset_indices(1000, 16, 3)
     assert len(subs) == 3 and all(len(s) == 16 for s in subs) and not set(subs[0]) & set(subs[1])
     assert len(fe.subset_indices(20, 16, 3)) >= 1 and len(fe.subset_indices(10, 16, 3)[0]) == 10
+
+
+# ----------------------------------------------------------------------------- exploratory diagnostics
+def test_align_cameras_recovers_a_known_similarity():
+    from da3.enhancements.foveated.metrics import align_cameras, transform_w2c
+    from scipy.spatial.transform import Rotation
+
+    rng = np.random.default_rng(0)
+    R_c2w = Rotation.random(6, random_state=1).as_matrix()
+    C = rng.normal(size=(6, 3))
+    w2c = np.zeros((6, 3, 4))
+    w2c[:, :3, :3] = R_c2w.transpose(0, 2, 1)
+    w2c[:, :3, 3] = -np.einsum("nij,nj->ni", w2c[:, :3, :3], C)
+    s, R, t = 2.5, Rotation.from_euler("xyz", [10, -20, 30], degrees=True).as_matrix(), np.array([1.0, -2.0, 0.5])
+    moved = transform_w2c(w2c, s, R, t)
+    s2, R2, t2 = align_cameras(w2c, moved)
+    assert s2 == pytest.approx(s) and np.allclose(R2, R) and np.allclose(t2, t)
+    assert np.allclose(transform_w2c(w2c, s2, R2, t2), moved)
+    # collinear centres: the rotation still comes from the camera orientations
+    C[:, 1:] = 0.0
+    w2c[:, :3, 3] = -np.einsum("nij,nj->ni", w2c[:, :3, :3], C)
+    s3, R3, _ = align_cameras(w2c, transform_w2c(w2c, s, R, t))
+    assert s3 == pytest.approx(s) and np.allclose(R3, R)
+
+
+def test_probe_exploratory_reads_cross_pairs_and_error_kinds():
+    from da3.enhancements.foveated.analysis import probe_exploratory, row_metric
+
+    plan = load_plan(PLAN)
+    plan["bootstrap"]["n"] = 300
+    rows = _synthetic_rows(1.01)
+    for r in rows:   # rotation fine everywhere; translation broken only on the foveated cross pairs
+        f = np.asarray(r["focus"], bool)
+        n = len(f)
+        r["pair_rot"] = _const_pairs(n, f, 2, 2, 2).tolist()
+        cross = 25 if r["config"].startswith("fov") else 2
+        r["pair_trans"] = _const_pairs(n, f, 2, 2, cross).tolist()
+        r["scale"] = np.where(f, 1.0, 1.5 if r["config"].startswith("fov") else 1.0).tolist()
+    fov = next(r for r in rows if r["config"] == "fov50_504-252")
+    assert row_metric(fov, "auc30", "cross", fov["focus"]) == pytest.approx(1 - 7.5 / 30, abs=0.02)
+    assert row_metric(fov, "auc30_rot", "cross", fov["focus"]) > row_metric(fov, "auc30_trans", "cross", fov["focus"])
+    assert row_metric(fov, "scale_ratio", "all", fov["focus"]) == pytest.approx(1.5)
+    assert np.isnan(row_metric({k: v for k, v in fov.items() if k != "pair_rot"}, "auc30_rot", "cross", fov["focus"]))
+    out = probe_exploratory(rows, plan)
+    rot = out["cross-pair AUC@30 rotation only, fov50_504-252 − u252"]
+    trans = out["cross-pair AUC@30 translation only, fov50_504-252 − u252"]
+    assert rot["estimate"] == pytest.approx(0.0, abs=1e-9) and trans["estimate"] < -50
+    assert "G1b ceiling: focus AbsRel, u504 / focus views alone" in out

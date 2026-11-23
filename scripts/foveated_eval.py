@@ -133,6 +133,18 @@ def evenly(n: int, k: int) -> np.ndarray:
     return np.unique(np.round(np.linspace(0, n - 1, min(n, k))).astype(int))
 
 
+def degrade_to(img: np.ndarray, res: int) -> np.ndarray:
+    """The image as a `res`-px view would see it, brought back to its original size (released
+    preprocessing at `res`, then bicubic upsampling). Diagnostic: fed at the focus resolution it has
+    the focus views' token grid and patch footprint but only `res`-px information."""
+    import cv2
+
+    from da3.io_utils import preprocess_like_official
+
+    h, w = img.shape[:2]
+    return cv2.resize(preprocess_like_official(img, res), (w, h), interpolation=cv2.INTER_CUBIC)
+
+
 def prep_views(images, res_per_view):
     """Released preprocessing of every uint8 RGB image at its own resolution (center-crop to a
     common size within a resolution, as io_utils.load_views) -> list of (3, H, W) tensors."""
@@ -203,20 +215,30 @@ def warmup(model, device):
     free_cuda()
 
 
-def depth_rows(preds, gts):
-    """Per-view errors (median-aligned per view, and one scale per scene)."""
+def depth_rows(preds, gts, groups=None):
+    """Per-view errors: median-aligned per view, one scale per scene, and (diagnostic) one scale per
+    group of views (`groups`: one label per view, e.g. the focus mask; default: one group). Also the
+    per-view median-alignment scale median(gt) / median(pred): its ratio between two groups of the
+    same pass measures how far apart their depth scales are (1 = consistent)."""
     from da3.enhancements.foveated.metrics import depth_errors, pooled_scale, resize_pred
 
     preds = [None if (p is None or g is None) else resize_pred(p, g.shape) for p, g in zip(preds, gts)]
     s = pooled_scale(preds, gts)
-    out = {"abs_rel": [], "delta1": [], "delta105": [], "abs_rel_scene": []}
-    for p, g in zip(preds, gts):
+    labels = [0] * len(preds) if groups is None else [int(g) for g in groups]
+    s_group = {lab: pooled_scale([p for p, l in zip(preds, labels) if l == lab],
+                                 [g for g, l in zip(gts, labels) if l == lab]) for lab in set(labels)}
+    out = {"abs_rel": [], "delta1": [], "delta105": [], "abs_rel_scene": [], "abs_rel_group": [], "scale": []}
+    for p, g, lab in zip(preds, gts, labels):
         e = depth_errors(p, g) if p is not None else None
         es = depth_errors(p, g, scale=s) if (p is not None and np.isfinite(s)) else None
+        sg = s_group[lab]
+        eg = depth_errors(p, g, scale=sg) if (p is not None and np.isfinite(sg)) else None
         out["abs_rel"].append(e["abs_rel"] if e else float("nan"))
         out["delta1"].append(e["delta1"] if e else float("nan"))
         out["delta105"].append(e["delta105"] if e else float("nan"))
         out["abs_rel_scene"].append(es["abs_rel"] if es else float("nan"))
+        out["abs_rel_group"].append(eg["abs_rel"] if eg else float("nan"))
+        out["scale"].append(e["scale"] if e else float("nan"))
     return out
 
 
@@ -338,12 +360,36 @@ def probe_configs(args):
         for seed in args.focus_seeds:
             s = replace(specs[0], strategy="random", seed=int(seed))
             cfgs.append((s.name, s, None, None))
+        if getattr(args, "diagnostics", False):   # exploratory (added after the limited run, not pre-registered)
+            cfgs.append((f"diag_up{specs[0].context_res}", specs[0], specs[0].focus_res, "upsampled"))
     return cfgs
+
+
+def two_pass_row(lo: dict, hi: dict, focus: np.ndarray, gts, gt_w2c, dims, hws_lo, hws_hi) -> dict:
+    """Two-pass control (exploratory): pass A = every view at the context resolution, pass B = the
+    focus views alone at the focus resolution. B is mapped into A's frame with the similarity fitted on
+    the focus cameras (seen in both passes); focus views take B's depth (times that scale) and pose,
+    context views keep A's. `lo` / `hi`: {"preds": [n], "w2c": (n, 3, 4), "time_s", "peak_mem_gb"}."""
+    from da3.enhancements.foveated.metrics import (align_cameras, pairwise_pose_errors, pairwise_rot_trans_errors,
+                                                   transform_w2c)
+    from da3.enhancements.foveated.plan import backbone_cost
+
+    fi = np.flatnonzero(focus)
+    s, R, t = align_cameras(hi["w2c"][fi], lo["w2c"][fi])
+    w2c = np.array(lo["w2c"], np.float64)
+    w2c[fi] = transform_w2c(hi["w2c"][fi], s, R, t)
+    preds = [hi["preds"][i] * s if focus[i] else lo["preds"][i] for i in range(len(focus))]
+    Er, Et = pairwise_rot_trans_errors(w2c, gt_w2c)
+    cost_a, cost_b = backbone_cost(hws_lo, **dims), backbone_cost(hws_hi, **dims)
+    return {"tokens": cost_a["tokens"] + cost_b["tokens"], "gflops": cost_a["gflops"] + cost_b["gflops"],
+            "time_s": lo["time_s"] + hi["time_s"], "peak_mem_gb": max(lo["peak_mem_gb"], hi["peak_mem_gb"]),
+            "pair_err": pairwise_pose_errors(w2c, gt_w2c), "pair_rot": Er, "pair_trans": Et, "align_scale": s,
+            **depth_rows(preds, gts, groups=focus)}
 
 
 def cmd_probe(args):
     from da3.enhancements.foveated.analysis import load_plan, probe_gates
-    from da3.enhancements.foveated.metrics import pairwise_pose_errors
+    from da3.enhancements.foveated.metrics import pairwise_pose_errors, pairwise_rot_trans_errors
     from da3.enhancements.foveated.plan import backbone_cost, model_dims, select_focus, view_resolutions
     from da3.eval.gt_depth import gt_depth_index, read_gt_depth
     from da3.io_utils import read_rgb
@@ -355,6 +401,10 @@ def cmd_probe(args):
     model = load_model(args.weights, device)
     dims = model_dims(model)
     configs = probe_configs(args)
+    # two-pass control (exploratory): needs the uniform pass at the primary context resolution
+    configs_ctx = next((s.context_res for (_, s, _, sp) in configs if sp == "focus_only"), None)
+    if configs_ctx not in args.uniform:
+        configs_ctx = None
     warmup(model, device)
     rows = []
     for data in args.datasets:
@@ -371,6 +421,7 @@ def cmd_probe(args):
                 gt_w2c = np.asarray(sd.extrinsics)[idx]
                 n = len(idx)
                 base = select_focus(n, args.fraction)          # evenly spaced focus views (primary)
+                keep_tp = {}                                   # outputs reused by the two-pass control
                 for name, spec, res, special in configs:
                     own = spec is not None and special is None
                     focus = select_focus(n, spec.fraction, strategy=spec.strategy, seed=spec.seed) if own else base
@@ -381,7 +432,10 @@ def cmd_probe(args):
                         k = int(f_idx[len(f_idx) // 2]) if len(f_idx) > 1 else min(1, n - 1)
                         order = np.array([k] + [i for i in range(n) if i != k])
                     res_list = view_resolutions(focus, spec.focus_res, spec.context_res) if own else [res] * n
-                    r = run_pass(model, prep_views([images[i] for i in order], [res_list[i] for i in order]), device,
+                    imgs = images
+                    if special == "upsampled":   # context views carry context-res information on the focus grid
+                        imgs = [im if focus[i] else degrade_to(im, spec.context_res) for i, im in enumerate(images)]
+                    r = run_pass(model, prep_views([imgs[i] for i in order], [res_list[i] for i in order]), device,
                                  ref_strategy=args.ref_strategy, balance=bool(own and spec.balance))
                     row = {"data": data, "scene": scene, "subset": sub, "config": name,
                            "kind": special or ("uniform" if spec is None else "foveated"), "n_views": n,
@@ -393,18 +447,32 @@ def cmd_probe(args):
                             preds[i] = r["out"]["depth"][j].float().numpy()
                             w2c[i] = r["w2c"][j]
                         m_idx = np.flatnonzero(members)
-                        E = np.full((n, n), np.nan)
+                        E, Er, Et = (np.full((n, n), np.nan) for _ in range(3))
                         E[np.ix_(m_idx, m_idx)] = pairwise_pose_errors(w2c[m_idx], gt_w2c[m_idx])
+                        er, et = pairwise_rot_trans_errors(w2c[m_idx], gt_w2c[m_idx])
+                        Er[np.ix_(m_idx, m_idx)], Et[np.ix_(m_idx, m_idx)] = er, et
                         cost = backbone_cost(r["hw"], **dims)
                         row.update({"tokens": cost["tokens"], "gflops": cost["gflops"], "time_s": r["time_s"],
-                                    "peak_mem_gb": r["peak_mem_gb"], "pair_err": E,
-                                    **depth_rows(preds, [g if mm else None for g, mm in zip(gts, members)])})
+                                    "peak_mem_gb": r["peak_mem_gb"], "pair_err": E, "pair_rot": Er, "pair_trans": Et,
+                                    **depth_rows(preds, [g if mm else None for g, mm in zip(gts, members)],
+                                                 groups=focus)})
+                        if args.diagnostics and configs_ctx and name in (f"u{configs_ctx}", "focus_only"):
+                            keep_tp[name] = {"preds": preds, "w2c": w2c, "time_s": r["time_s"],
+                                             "peak_mem_gb": r["peak_mem_gb"], "hw": r["hw"]}
                     rows.append(row)
                     del r
+                if len(keep_tp) == 2:   # two-pass control from the all-context-res pass + the focus-only pass
+                    lo, hi = keep_tp[f"u{configs_ctx}"], keep_tp["focus_only"]
+                    row = {"data": data, "scene": scene, "subset": sub, "config": f"twopass_{configs_ctx}+focus",
+                           "kind": "two_pass", "n_views": n, "frames": [int(i) for i in idx], "focus": base.tolist(),
+                           "members": np.ones(n, bool).tolist(), "oom": False}
+                    row.update(two_pass_row(lo, hi, base, gts, gt_w2c, dims, lo["hw"], hi["hw"]))
+                    rows.append(row)
             print(f"[probe] {data}/{scene}: {len(subsets)} view subsets x {len(configs)} configurations")
     analysis = probe_gates(rows, plan)
     jdump({"weights": args.weights, "datasets": args.datasets, "n_views": args.n_views, "fraction": args.fraction,
            "subsets": args.subsets, "configs": [c[0] for c in configs], "max_scenes": args.max_scenes,
+           "diagnostics": bool(args.diagnostics),
            "plan": plan["path"], "plan_sha256": plan["sha256"], "rows": rows, "analysis": analysis}, args.out)
     print_gates(analysis)
 
@@ -420,6 +488,48 @@ def print_gates(analysis: dict, prefix: str = ""):
 
 
 # ============================================================================= scaling (GPU)
+def depth_summary(dr: dict, fm: np.ndarray) -> dict:
+    """Scaling-row depth fields from depth_rows output on the depth views (fm = their focus mask):
+    AbsRel focus / context, scene-scale AbsRel, and the diagnostics (group-scale AbsRel, scale ratio
+    context / focus: median per-view alignment scale of each group)."""
+    a = {k: np.asarray(dr[k], np.float64) for k in ("abs_rel", "abs_rel_scene", "abs_rel_group", "scale")}
+    has_ctx = bool((~fm).any())
+    ratio = (float(np.nanmedian(a["scale"][~fm]) / np.nanmedian(a["scale"][fm]))
+             if has_ctx and np.isfinite(a["scale"][fm]).any() and np.isfinite(a["scale"][~fm]).any() else float("nan"))
+    return {"abs_rel_focus": nanmean(a["abs_rel"][fm]),
+            "abs_rel_context": nanmean(a["abs_rel"][~fm]) if has_ctx else float("nan"),
+            "abs_rel_scene_focus": nanmean(a["abs_rel_scene"][fm]),
+            "abs_rel_scene_all": nanmean(a["abs_rel_scene"]),
+            "abs_rel_group_all": nanmean(a["abs_rel_group"]),
+            "scale_ratio_ctx_focus": ratio}
+
+
+def scaling_two_pass_row(lo: dict, hi: dict, focus, depth_views, gt_w2c, gt_cache, scene, n, spec) -> dict:
+    """Large-view two-pass control (exploratory): lo = every view at the context resolution, hi = the
+    focus views alone at the focus resolution; hi is mapped into lo's frame with the similarity fitted
+    on the focus cameras; focus views take hi's pose and depth (times that scale)."""
+    from da3.enhancements.foveated.metrics import (align_cameras, pairwise_pose_errors, transform_w2c,
+                                                   view_subset_aucs)
+
+    fi = np.flatnonzero(focus)
+    w2c_lo = np.asarray(lo["w2c"], np.float64)            # all n views, in order
+    w2c_hi = np.asarray(hi["w2c"], np.float64)            # the focus views, in order
+    s, R, t = align_cameras(w2c_hi, w2c_lo[fi])
+    w2c = w2c_lo.copy()
+    w2c[fi] = transform_w2c(w2c_hi, s, R, t)
+    aucs = view_subset_aucs(pairwise_pose_errors(w2c, gt_w2c), focus)
+    gi = [i for i in range(n) if depth_views[i]]
+    preds = [hi["preds"][i] * s if focus[i] else lo["preds"][i] for i in gi]
+    fm = np.array([bool(focus[i]) for i in gi])
+    dr = depth_rows(preds, [gt_cache[i] for i in gi], groups=fm)
+    return {"scene": scene, "n_views": n, "kind": "two_pass", "config": f"twopass_{spec.context_res}+focus",
+            "views_used": n, "oom": False, "tokens": lo["tokens"] + hi["tokens"], "gflops": lo["gflops"] + hi["gflops"],
+            "time_s": lo["time_s"] + hi["time_s"], "time_runs": [lo["time_s"] + hi["time_s"]],
+            "timed": bool(lo["timed"] and hi["timed"]),
+            "peak_mem_gb": max(lo["peak_mem_gb"], hi["peak_mem_gb"]), "auc": aucs, "align_scale": s,
+            **depth_summary(dr, fm)}
+
+
 def cmd_scaling(args):
     from da3.enhancements.foveated import FoveationSpec
     from da3.enhancements.foveated.metrics import pairwise_pose_errors, view_subset_aucs
@@ -471,6 +581,10 @@ def cmd_scaling(args):
                         ("all_context_res", f"u{spec.context_res}", np.ones(n, bool), [spec.context_res] * n, False),
                         ("fewer_views_equal_budget", f"sub{int(sub.sum())}_{spec.focus_res}", sub,
                          [spec.focus_res] * int(sub.sum()), False)]
+            if args.two_pass:   # exploratory: pass B of the two-pass control (pass A = all_context_res)
+                configs.append(("focus_only", f"focus{int(focus.sum())}_{spec.focus_res}", focus.copy(),
+                                [spec.focus_res] * int(focus.sum()), False))
+            keep_tp, gt_cache = {}, {}
             for kind, name, members, plan, bal in configs:
                 row = {"scene": scene, "n_views": n, "kind": kind, "config": name, "views_used": int(members.sum())}
                 if kind in failed and n >= failed[kind]:   # a larger pass of the same kind cannot fit either
@@ -501,19 +615,28 @@ def cmd_scaling(args):
                 preds = [r["out"]["depth"][j].float().numpy() for j in dv]
                 gts = []
                 for j in dv:
-                    f = str(sd.image_files[idx[mi[j]]])
-                    gts.append(read_gt_depth(args.dataset, index[f][0], index[f][1], shape=index[f][2]))
-                dr = depth_rows(preds, gts)
+                    gi = int(mi[j])
+                    if gi not in gt_cache:
+                        f = str(sd.image_files[idx[gi]])
+                        gt_cache[gi] = read_gt_depth(args.dataset, index[f][0], index[f][1], shape=index[f][2])
+                    gts.append(gt_cache[gi])
                 fm = np.array([bool(f_loc[j]) for j in dv])
+                dr = depth_rows(preds, gts, groups=fm)
                 row.update({"oom": False, "tokens": cost["tokens"], "gflops": cost["gflops"], "time_s": r["time_s"],
                             "time_runs": times, "timed": repeats > 1, "peak_mem_gb": r["peak_mem_gb"], "auc": aucs,
-                            "abs_rel_focus": nanmean(np.asarray(dr["abs_rel"])[fm]),
-                            "abs_rel_context": nanmean(np.asarray(dr["abs_rel"])[~fm]) if (~fm).any() else float("nan"),
-                            "abs_rel_scene_focus": nanmean(np.asarray(dr["abs_rel_scene"])[fm])})
+                            **depth_summary(dr, fm)})
                 rows.append(row)
+                if kind in ("all_context_res", "focus_only"):
+                    keep_tp[kind] = {"w2c": r["w2c"], "mi": mi, "time_s": r["time_s"], "peak_mem_gb": r["peak_mem_gb"],
+                                     "timed": repeats > 1,
+                                     "tokens": cost["tokens"], "gflops": cost["gflops"],
+                                     "preds": {int(mi[j]): p for j, p in zip(dv, preds)}}
                 print(f"[scaling] {scene} N={n} {name}: {r['time_s']:.1f} s, {r['peak_mem_gb']:.2f} GB, "
                       f"tokens {cost['tokens']}, focus AUC@30 {100 * aucs.get('focus', {}).get('auc30', float('nan')):.1f}")
                 del r
+            if len(keep_tp) == 2:   # two-pass control: A = all views at the context res, B = focus views alone
+                rows.append(scaling_two_pass_row(keep_tp["all_context_res"], keep_tp["focus_only"], focus, depth_views,
+                                                 gt_w2c, gt_cache, scene, n, spec))
             free_cuda()
     gpu = torch.cuda.get_device_name(device) if device.type == "cuda" else "cpu"
     jdump({"weights": args.weights, "dataset": args.dataset, "scenes": args.scenes, "n_views": args.n_views,
@@ -554,7 +677,7 @@ def cmd_sec6views(args):
                     e = index.get(str(f))
                     gts.append(read_gt_depth(data, e[0], e[1], shape=e[2]) if e else None)
                 depth = sc["results"]["depth"]
-                row.update(depth_rows([depth[i] for i in range(S)], gts))
+                row.update(depth_rows([depth[i] for i in range(S)], gts, groups=own))
             rows.append(row)
         print(f"[sec6views] {args.tag} {data}: {sum(r['data'] == data for r in rows)} scenes")
     jdump({"tag": args.tag, "config": args.config, "weights": args.weights, "datasets": args.datasets,
@@ -885,7 +1008,12 @@ def md_table(head, rows) -> str:
 PROBE_COLS = [("AbsRel focus", "abs_rel", "focus"), ("AbsRel context", "abs_rel", "context"),
               ("AbsRel all", "abs_rel", "all"), ("AbsRel scene-scale", "abs_rel_scene", "all"),
               ("δ1 focus", "delta1", "focus"), ("AUC@3 all", "auc03", "all"), ("AUC@30 all", "auc30", "all"),
-              ("AUC@30 focus", "auc30", "focus"), ("AUC@30 context", "auc30", "context"), ("tokens", "tokens", "all"),
+              ("AUC@30 focus", "auc30", "focus"), ("AUC@30 context", "auc30", "context"),
+              # exploratory diagnostics (*): not pre-registered, added after the limited run
+              ("AUC@30 cross*", "auc30", "cross"), ("AUC@30 cross rot*", "auc30_rot", "cross"),
+              ("AUC@30 cross trans*", "auc30_trans", "cross"), ("AbsRel group-scale*", "abs_rel_group", "all"),
+              ("scale ctx/focus*", "scale_ratio", "all"),
+              ("tokens", "tokens", "all"),
               ("GFLOPs", "gflops", "all"), ("time (s)", "time_s", "all"), ("peak mem (GB)", "peak_mem_gb", "all")]
 
 
@@ -1132,7 +1260,7 @@ def readable_log_axis(ax, axis="x", ticks=None):
 
 
 SCALING_KINDS = ["all_focus_res", "foveated", "foveated_bal", "uniform_equal_budget", "fewer_views_equal_budget",
-                 "all_context_res"]
+                 "all_context_res", "focus_only", "two_pass"]   # the last two: exploratory (--two-pass)
 
 
 def interp_equal_budget(points, tokens):
@@ -1192,7 +1320,7 @@ def cmd_analyse(args):
 
     from da3.compare import load_records, make_record, protocol, save_record
     from da3.compare.tables import sec6_markdown
-    from da3.enhancements.foveated.analysis import load_plan, probe_gates, zoom_gates
+    from da3.enhancements.foveated.analysis import load_plan, probe_exploratory, probe_gates, zoom_gates
     from da3.train_utils import environment_info, git_commit
 
     out_dir = Path(args.out_dir).resolve()
@@ -1249,10 +1377,23 @@ def cmd_analyse(args):
                       "views, the uniform rows on the evenly spaced ones):\n")
             md.append(md_table(["dataset · config"] + [c[0] for c in PROBE_COLS] + ["scenes"],
                                [[f"{NAMES.get(d, d)} · {c}"] + list(v.values()) for (d, c), v in agg.items()]))
+            md.append("Columns marked * are exploratory diagnostics (not pre-registered): `cross` = focus–context pairs, "
+                      "`rot` / `trans` = rotation-only / translation-only errors; group-scale = one depth scale per "
+                      "resolution group instead of one per scene; scale ctx/focus = median per-view depth scale of the "
+                      "context views over that of the focus views (1 = consistent).\n")
+            expl = probe_exploratory(pr["rows"], plan)
+            if expl:
+                md.append(f"**Exploratory diagnostics** (added after the limited run of 2026-11-23; descriptive, "
+                          f"{level}% scene-bootstrap CIs, no decision; see the plan's deviations log):\n")
+                md.append(md_table(["comparison", f"estimate [{level}% CI]", "scenes"],
+                                   [[k, _ci_cell(e["estimate"], e["ci_lo"], e["ci_hi"], ratio=e.get("unit") != "pts"),
+                                     e["scenes"]] for k, e in expl.items()]))
             for k, g in an["gates"].items():
                 gates_all[f"{model} · {k}"] = g
             extra = {"probe": {f"{NAMES.get(d, d)} · {c}": v for (d, c), v in agg.items()},
-                     "gates": gates_flat(an["gates"]), "margins": m_extra}
+                     "gates": gates_flat(an["gates"]), "margins": m_extra,
+                     "exploratory": {k: {f: e[f] for f in ("estimate", "ci_lo", "ci_hi", "scenes")}
+                                     for k, e in expl.items()}}
             save_record(make_record(
                 enhancement="foveated", variant="probe", tag=f"fov_{model}__probe{pr['n_views']}",
                 setting="official", weights=weights,
@@ -1375,7 +1516,8 @@ def probe_figure(agg, datasets, path):
         uni = sorted([(m["tokens"], m, c) for (dd, c), m in agg.items() if dd == d and c.startswith("u") and c[1:].isdigit()],
                      key=lambda t: t[0])
         fov = sorted([(m["tokens"], m, c) for (dd, c), m in agg.items()
-                      if dd == d and c.startswith("fov") and "_random" not in c], key=lambda t: t[2])
+                      if dd == d and c.startswith(("fov", "twopass", "diag_")) and "_random" not in c],
+                     key=lambda t: t[2])
         for ax, key, lab in ((axes[0][j], "AbsRel focus", "AbsRel of focus views ↓"),
                              (axes[1][j], "AUC@30 context", "AUC@30 (%) of context-view pairs ↑")):
             ax.plot([t for t, _, _ in uni], [m[key] for _, m, _ in uni], "o-", color="k", label="uniform resolution")
@@ -1436,7 +1578,8 @@ def scaling_tables(sc):
     for r in sc["rows"]:
         groups[(r["n_views"], r["kind"])].append(r)
     head = ["views", "configuration", "kind", "views used", "tokens", "GFLOPs", "time (s)", "peak mem (GB)",
-            "speed-up vs all at focus res.", "AUC@3 focus", "AUC@30 focus", "AUC@30 all", "AbsRel focus", "AbsRel context"]
+            "speed-up vs all at focus res.", "AUC@3 focus", "AUC@30 focus", "AUC@30 all", "AUC@30 cross*",
+            "AbsRel focus", "AbsRel context", "AbsRel scene-scale*", "AbsRel group-scale*", "scale ctx/focus*"]
     out_rows, extra = [], {}
     order = sorted(groups, key=lambda k: (k[0], SCALING_KINDS.index(k[1]) if k[1] in SCALING_KINDS else 99))
     for n, kind in order:
@@ -1444,7 +1587,7 @@ def scaling_tables(sc):
         ok = [r for r in rs if not r.get("oom")]
         ref = [r for r in groups.get((n, "all_focus_res"), []) if not r.get("oom")]
         if not ok:
-            out_rows.append([n, rs[0]["config"], kind, rs[0]["views_used"]] + ["OOM"] + [float("nan")] * 9)
+            out_rows.append([n, rs[0]["config"], kind, rs[0]["views_used"]] + ["OOM"] + [float("nan")] * (len(head) - 5))
             extra[f"N={n} · {kind}"] = {"OOM": True}
             continue
         t = nanmean([r["time_s"] for r in ok])
@@ -1454,7 +1597,11 @@ def scaling_tables(sc):
                 100 * nanmean([r["auc"].get("focus", {}).get("auc03", np.nan) for r in ok]),
                 100 * nanmean([r["auc"].get("focus", {}).get("auc30", np.nan) for r in ok]),
                 100 * nanmean([r["auc"]["all"]["auc30"] for r in ok]),
-                nanmean([r["abs_rel_focus"] for r in ok]), nanmean([r["abs_rel_context"] for r in ok])]
+                100 * nanmean([r["auc"].get("cross", {}).get("auc30", np.nan) for r in ok]),
+                nanmean([r["abs_rel_focus"] for r in ok]), nanmean([r["abs_rel_context"] for r in ok]),
+                nanmean([r.get("abs_rel_scene_all", np.nan) for r in ok]),
+                nanmean([r.get("abs_rel_group_all", np.nan) for r in ok]),
+                nanmean([r.get("scale_ratio_ctx_focus", np.nan) for r in ok])]
         out_rows.append([n, ok[0]["config"], kind, ok[0]["views_used"]] + vals)
         extra[f"N={n} · {kind} ({ok[0]['config']})"] = dict(zip(head[4:], vals))
     return md_table(head, out_rows), extra
@@ -1530,6 +1677,9 @@ def main():
     p.add_argument("--focus-seeds", type=int, nargs="*", default=[1, 2, 3],
                    help="robustness: the primary configuration with random focus views")
     p.add_argument("--ref-strategy", default="first")
+    p.add_argument("--diagnostics", action="store_true",
+                   help="exploratory, not pre-registered: context views at context-res information on the focus grid "
+                        "(diag_up<res>) and the two-pass control (all views at the context res + focus views alone)")
     p.add_argument("--plan", default=str(PLAN))
     p.add_argument("--out", required=True)
 
@@ -1545,6 +1695,9 @@ def main():
     p.add_argument("--depth-every", type=int, default=10, help="depth metrics on focus views + every k-th view")
     p.add_argument("--timing-repeats", type=int, default=3, help="passes per configuration on the timed scenes (median)")
     p.add_argument("--timing-scenes", type=int, default=2, help="the first k scenes get repeated timings")
+    p.add_argument("--two-pass", action="store_true",
+                   help="exploratory: also the focus views alone at the focus res, and the two-pass control "
+                        "(all views at the context res + focus views alone, aligned on the focus cameras)")
     p.add_argument("--out", required=True)
 
     p = sub.add_parser("sec6views")

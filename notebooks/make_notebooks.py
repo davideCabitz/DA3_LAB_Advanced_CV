@@ -403,16 +403,19 @@ PLAN = "configs/foveated_analysis.yaml"      # pre-registered analysis plan: do 
 PROBE_VIEWS = 16
 PROBE_SUBSETS = 3                           # interleaved view subsets per scene (the scene stays the unit)
 PROBE_UNIFORM = [504, 378, 336, 280, 252]
-PROBE_FOVEATED = ["context_res=252", "context_res=280", "context_res=252,balance=1"]   # first = primary (plan)
+PROBE_FOVEATED = ["context_res=252", "context_res=280", "context_res=252,balance=1",   # first = primary (plan)
+                  "context_res=336", "context_res=378"]   # exploratory sweep (not in the plan: never gated)
 PROBE_FOCUS_SEEDS = [1, 2, 3]               # robustness: random focus views for the primary configuration
+PROBE_DIAGNOSTICS = True                    # exploratory: upsampled-context pass + two-pass control (no gates)
 # 2 · large-view protocol (7Scenes sequences: 1000 frames each, stairs 500)
 SCALING_MODELS = ["da3-small"]
 SCALING_SCENES = ["chess", "fire", "heads", "office", "pumpkin", "redkitchen", "stairs"]
 SCALING_VIEWS = [100, 250, 500, 1000]
 SCALING_FRACTION = 0.1
 TIMING_REPEATS, TIMING_SCENES = 3, 2        # median of 3 timed passes on the first 2 scenes
+SCALING_TWO_PASS = True                     # exploratory: focus views alone + two-pass control
 # 3 · Sec. 6 protocol (released harness, <= 100 frames, seed 42)
-SEC6_MODES = ["pose", "recon_unposed"]      # ["pose"] = fast run without TSDF fusion
+SEC6_MODES = ["pose"]                       # TSDF skipped (deviations log); ["pose", "recon_unposed"] = with F1
 SEC6_UNIFORM = [504, 336, 252]              # 504 = the original DA3, the reference row
 SEC6_FOVEATED = ["fraction=0.25,context_res=252", "fraction=0.25,context_res=252,balance=1",
                  "fraction=0.1,context_res=252"]
@@ -468,16 +471,22 @@ for m in MODELS:
 - **G3 (primary 504/252):** focus-view AbsRel non-inferior to all-504 **and** context-pair AUC@30
   non-inferior to all-252.
 - Secondary: 280-px context views, attention-mass balancing. Robustness: 3 random focus choices.
-- The A/A run (all-504, reference view moved) sets the noise floor of the margins."""),
+- The A/A run (all-504, reference view moved) sets the noise floor of the margins.
+- **Exploratory, never gated** (added after the limited run of 2026-11-23, see the plan's deviations
+  log): 336 / 378-px context views, context views with 252-px detail on the 504-px grid, the two-pass
+  control (all views at 252 px + focus views alone, aligned), cross-pair AUC with rotation and
+  translation errors apart, one depth scale per resolution group."""),
         code('''if RUN["probe"]:
     unif = " ".join(map(str, PROBE_UNIFORM))
     fov = " ".join(f'"{s}"' for s in PROBE_FOVEATED)
     seeds = " ".join(map(str, PROBE_FOCUS_SEEDS))
+    diag = "--diagnostics" if PROBE_DIAGNOSTICS else ""
     for m in MODELS:
         if not os.path.exists(f"{OUT}/probe_{m}.json"):
             !python scripts/foveated_eval.py probe {H} --weights official:{m} --datasets {DS} \\
                 --max-scenes {MAX_SCENES} --n-views {PROBE_VIEWS} --subsets {PROBE_SUBSETS} --uniform {unif} \\
-                --foveated {fov} --focus-seeds {seeds} --plan {PLAN} --out {OUT}/probe_{m}.json
+                --foveated {fov} --focus-seeds {seeds} {diag} \\
+                --plan {PLAN} --out {OUT}/probe_{m}.json
 for m in MODELS:
     p = f"{OUT}/probe_{m}.json"
     if os.path.exists(p):
@@ -492,11 +501,13 @@ all at 504 px (until it runs out of memory), uniform resolution with the same to
 read on the focus views, which every configuration contains."""),
         code('''if RUN["scaling"]:
     scenes, views = " ".join(SCALING_SCENES), " ".join(map(str, SCALING_VIEWS))
+    two_pass = "--two-pass" if SCALING_TWO_PASS else ""
     for m in SCALING_MODELS:
         if not os.path.exists(f"{OUT}/scaling_{m}.json"):
             !python scripts/foveated_eval.py scaling {H} --weights official:{m} --scenes {scenes} \\
                 --n-views {views} --fraction {SCALING_FRACTION} --balance --timing-repeats {TIMING_REPEATS} \\
-                --timing-scenes {TIMING_SCENES} --out {OUT}/scaling_{m}.json'''),
+                --timing-scenes {TIMING_SCENES} {two_pass} \\
+                --out {OUT}/scaling_{m}.json'''),
         md("""### 3 · Sec. 6 protocol: released harness with uniform and foveated resolutions
 Every run goes through `scripts/eval_bench.py` (`--process-res` / `--meter` for uniform resolutions,
 `--foveated` for mixed ones) and writes a standard record; the reference row is the original DA3
