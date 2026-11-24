@@ -51,12 +51,31 @@ def write_ply(path: str | Path, xyz: np.ndarray, rgb: np.ndarray | None = None):
         f.write(arr.tobytes())
 
 
-def fuse_point_cloud(points, colors, conf=None, conf_percentile: float = 40.0, max_points: int = 2_000_000, seed=0):
-    """points (N,H,W,3), colors (N,H,W,3) uint8, conf (N,H,W). Keeps pixels whose confidence is above
-    the given percentile (per scene), then randomly subsamples to max_points."""
+def depth_edge_mask(depth, rtol: float = 0.05) -> np.ndarray:
+    """True at depth discontinuities ("flying pixels"): the depth range of the 3x3 neighbourhood is
+    larger than `rtol` x the pixel's depth. At an object / background boundary the network outputs
+    in-between depths, which back-project to points strung along the camera rays. depth: (N, H, W)
+    or (H, W); invalid pixels (<= 0 or not finite) never count as neighbours and are not flagged."""
+    from scipy.ndimage import maximum_filter, minimum_filter
+
+    d = np.asarray(depth, np.float64)
+    valid = np.isfinite(d) & (d > 0)
+    size = (1, 3, 3) if d.ndim == 3 else (3, 3)
+    hi = maximum_filter(np.where(valid, d, 0.0), size=size)
+    lo = minimum_filter(np.where(valid, d, np.inf), size=size)
+    return valid & ((hi - lo) > rtol * np.where(valid, d, 1.0))
+
+
+def fuse_point_cloud(points, colors, conf=None, conf_percentile: float = 40.0, max_points: int = 2_000_000, seed=0,
+                     mask=None):
+    """points (N,H,W,3), colors (N,H,W,3) uint8, conf (N,H,W). Keeps pixels inside `mask` (e.g. not on
+    a depth edge) whose confidence is above the given percentile (per scene), then randomly
+    subsamples to max_points."""
     P = points.reshape(-1, 3)
     C = colors.reshape(-1, 3)
     keep = np.isfinite(P).all(1)
+    if mask is not None:
+        keep &= np.asarray(mask).reshape(-1)
     if conf is not None and conf_percentile > 0:
         c = conf.reshape(-1)
         keep &= c >= np.percentile(c[keep], conf_percentile)
@@ -136,10 +155,14 @@ def tsdf_mesh(depth, rgb, K, w2c, voxel: float | None = None, depth_trunc: float
     return v, f, c
 
 
-def depth_mesh(points, rgb, conf=None, conf_percentile=40.0, step: int = 2, max_edge_ratio: float = 0.05):
-    """Fallback mesher: triangulate each view's pixel grid, dropping triangles across depth edges."""
+def depth_mesh(points, rgb, conf=None, conf_percentile=40.0, step: int = 2, max_edge_ratio: float = 0.05,
+               mask=None):
+    """Fallback mesher: triangulate each view's pixel grid, dropping triangles across depth edges
+    (and pixels outside `mask`)."""
     verts, faces, cols, off = [], [], [], 0
-    thr = None if conf is None else np.percentile(conf, conf_percentile)
+    thr = None
+    if conf is not None:
+        thr = np.percentile(conf if mask is None else np.asarray(conf)[np.asarray(mask)], conf_percentile)
     for i in range(len(points)):
         P = points[i][::step, ::step]
         C = rgb[i][::step, ::step]
@@ -147,6 +170,8 @@ def depth_mesh(points, rgb, conf=None, conf_percentile=40.0, step: int = 2, max_
         ok = np.isfinite(P).all(-1)
         if thr is not None:
             ok &= conf[i][::step, ::step] >= thr
+        if mask is not None:
+            ok &= np.asarray(mask[i])[::step, ::step]
         idx = np.arange(h * w).reshape(h, w)
         a, b, c, d = idx[:-1, :-1], idx[:-1, 1:], idx[1:, :-1], idx[1:, 1:]
         flat = P.reshape(-1, 3)

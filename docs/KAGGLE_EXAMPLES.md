@@ -96,6 +96,10 @@ Each sub-folder of `multiview/` becomes one reconstruction named `my_<subfolder>
   - `--cameras-from ray`: build the point cloud from the ray-map cameras (paper Eq. 1-2) instead of
     the camera head;
   - `--conf-percentile 60`: drop more low-confidence points (cleaner, sparser point cloud);
+  - `--edge-rtol 0.05` (default): drops the "flying pixels" at depth edges. At the border between
+    an object and its background the predicted depth passes through in-between values, which
+    become streaks of points along the camera rays. `--edge-rtol 0` keeps them. This only changes
+    which pixels go into `points.ply` / `mesh.glb`; DA3's depth maps and cameras are untouched;
   - `--mesh depth` / `--mesh none`: cheaper meshing, or no mesh at all;
   - `--poses poses.json`: known cameras, if you have them. Format: `{"frames": [{"file": "IMG_0001.jpg",
     "K": 3x3 in pixels of the original image, "c2w": 4x4 OpenCV camera-to-world}, ...]}`.
@@ -181,7 +185,8 @@ The output is H.264 MP4, which plays in PowerPoint, Google Slides and browsers.
     - `seconds`, `resolution`, `background` (`"white"`, `"black"` or `"#RRGGBB"`);
     - `zoom` (larger = closer), `elevation`, `lens`;
     - `point_scale` (bigger points), `crop` (`None` keeps all points);
-    - `with_mesh`, `transparent` (PNG frames with alpha).
+    - `show`: `"points"`, `"mesh"` (the filled TSDF surface, true colours) or `"both"`;
+    - `transparent` (PNG frames with alpha).
   - Set `render = False` to preview first: **View → Cameras → Active Camera**, then press **Space**
     to play.
 - **From a terminal, without opening Blender** (import + video in one command):
@@ -195,7 +200,8 @@ The output is H.264 MP4, which plays in PowerPoint, Google Slides and browsers.
 | Problem | Fix |
 |---|---|
 | The subject is too small or too big | change `zoom` |
-| Gaps between points | raise `point_scale` to 1.5–2 |
+| Gaps between points / rows of dots | raise `point_scale` to 1.5–2, or `show = "mesh"` |
+| Thin streaks fanning out from the edges | re-run the notebook: `--edge-rtol` (default 0.05) removes them; zips made before 2026-11-24 still contain them |
 | Blobs | lower `point_scale` to 0.6 |
 | Sky or background clutter | lower `crop` to 1.5 |
 | Parts of the subject are cut off | raise `crop` to 3, or set it to `None` |

@@ -22,12 +22,14 @@ Usage, either:
       blender -b --python blender_import.py --python blender_turntable.py -- --dir <folder> [options]
     options: --mode auto|orbit|arc|inside  --seconds 8  --fps 30  --resolution 1920x1080
              --background white|black|#RRGGBB  --transparent  --elevation 20  --zoom 1.2  --lens 35
-             --point-scale 1.0  --crop 2.0  --with-mesh  --samples 16  --no-render
+             --point-scale 1.0  --crop 2.0  --show points|mesh|both  --samples 16  --no-render
 
 What it does to look good on any scene:
-  * centre = median of the points, size = 90th percentile of their distances (far "sky" points do
-    not shrink the subject); points farther than `crop` x that size are hidden (sky shells, stray
-    background), without changing the files;
+  * points farther than `crop` x the 90th-percentile distance from the median are hidden (sky
+    shells, stray background), without changing the files;
+  * framing: centre = middle of the 3rd-97th percentile box of the remaining points (dense ground /
+    steps do not pull it down), size = 97th percentile of the distances to it (the top of a tall
+    statue stays in the picture); zoom = 1 fits that size, larger = closer;
   * up = mean "up" direction of the photo cameras, so the scene stands upright even if the first
     photo was tilted; the motion starts on the photographed side;
   * point size from the measured point spacing (closes the gaps between neighbouring points) and at
@@ -37,6 +39,7 @@ What it does to look good on any scene:
 """
 
 import glob
+import json
 import math
 import os
 import runpy
@@ -55,11 +58,11 @@ CONFIG = {
     "background": "white",      # "white" | "black" | "#RRGGBB"
     "transparent": False,       # True: PNG frames with alpha (an MP4 cannot store transparency)
     "elevation": None,          # camera height in degrees; None = per mode (orbit 20, arc 12, inside -5)
-    "zoom": 1.2,                # orbit / arc: 1 = the subject (90% of the points) fits; larger = closer
+    "zoom": 1.0,                # orbit / arc: 1 = the whole subject (97% of its points) fits; larger = closer
     "lens": None,               # focal length in mm (36 mm sensor); None = per mode (35, or 18 inside)
+    "show": "points",           # "points" | "mesh" (filled TSDF surface, true colours) | "both"
     "point_scale": 1.0,         # multiplies the automatic point size
     "crop": 2.0,                # hide points farther than crop x the subject size (None = keep all)
-    "with_mesh": False,         # also render the TSDF mesh (DA3_mesh)
     "samples": 16,              # EEVEE samples per frame (more = smoother, slower)
     "render": True,             # False: only create the camera (preview: View > Cameras > Active Camera, Space)
     "dir": None,                # output folder; None = the folder of this script / the reconstruction
@@ -76,7 +79,7 @@ def parse_args(cfg):
     i = 0
     while i < len(argv):
         a, nxt = argv[i], (argv[i + 1] if i + 1 < len(argv) else None)
-        if a in ("--dir", "--mode", "--background"):
+        if a in ("--dir", "--mode", "--background", "--show"):
             cfg[a[2:]], i = nxt, i + 1
         elif a in ("--seconds", "--elevation", "--zoom", "--point-scale", "--crop", "--lens"):
             cfg[a[2:].replace("-", "_")], i = float(nxt), i + 1
@@ -87,8 +90,8 @@ def parse_args(cfg):
             cfg["resolution"], i = (int(w), int(h)), i + 1
         elif a == "--transparent":
             cfg["transparent"] = True
-        elif a == "--with-mesh":
-            cfg["with_mesh"] = True
+        elif a == "--with-mesh":                         # older spelling of --show both
+            cfg["show"] = "both"
         elif a == "--no-render":
             cfg["render"] = False
         i += 1                      # unknown options (e.g. blender_import.py's) are skipped
@@ -169,10 +172,18 @@ def unit(v):
     return v / n if n > 1e-12 else v
 
 
-def analyse(P, cam_pos, cam_fwd, cam_up):
-    """Centre, size, up axis, scene type and the angles the photos cover."""
-    center = np.median(P, axis=0)
-    radius = max(float(np.percentile(np.linalg.norm(P - center, axis=1), 90)), 1e-6)
+def subject_frame(P):
+    """Centre and size used for framing: the middle of the 3rd-97th percentile box of the points (not
+    their median, which dense ground / steps pull down) and the 97th percentile of the distances to it
+    (so the top of a tall statue stays in the picture)."""
+    lo, hi = np.percentile(P, 3, axis=0), np.percentile(P, 97, axis=0)
+    center = (lo + hi) / 2
+    radius = max(float(np.percentile(np.linalg.norm(P - center, axis=1), 97)), 1e-6)
+    return center, radius
+
+
+def analyse(P, cam_pos, cam_fwd, cam_up, center, radius):
+    """Up axis, scene type and the angles the photos cover, around the given subject centre / size."""
     up = unit(cam_up.mean(0)) if len(cam_up) and np.linalg.norm(cam_up.mean(0)) > 1e-6 else np.array([0.0, 0.0, 1.0])
     info = {"center": center, "radius": radius, "up": up, "n_cams": len(cam_pos)}
     if len(cam_pos) == 0:
@@ -211,6 +222,24 @@ def swing_half_width(angles, lo_deg, hi_deg, margin_deg=20.0):
     a = np.angle(np.exp(1j * np.asarray(angles)))                      # wrap to (-pi, pi]
     half = (np.abs(a).max() if len(a) else 0.0) + math.radians(margin_deg)
     return float(np.clip(half, math.radians(lo_deg), math.radians(hi_deg)))
+
+
+def photo_pixel_footprint(P, cam_pos, d, probes=20000):
+    """Size of one photo pixel at the points' distance (median over points): distance to the nearest
+    photo camera / focal length in pixels. Each photo's depth map becomes a regular grid of points
+    with about this spacing, so dots of about this size close the gaps between its rows."""
+    path = os.path.join(d, "transforms.json")
+    if not os.path.exists(path) or len(cam_pos) == 0:
+        return 0.0
+    with open(path, encoding="utf-8") as fh:
+        frames = json.load(fh).get("frames", [])
+    f = [math.sqrt(abs(fr["fl_x"] * fr["fl_y"])) for fr in frames if "fl_x" in fr and "fl_y" in fr]
+    if not f:
+        return 0.0
+    rng = np.random.default_rng(2)
+    Q = P[rng.choice(len(P), min(len(P), probes), replace=False)]
+    dist = np.min(np.linalg.norm(Q[:, None, :] - cam_pos[None, :, :], axis=2), axis=1)
+    return float(np.median(dist)) / float(np.median(f))
 
 
 def median_spacing(P, n_total, probes=2000):
@@ -362,6 +391,32 @@ def style_points(obj, radius, center_world, crop_radius):
     tree.nodes["DA3_crop_compare"].inputs[1].default_value = crop_radius   # rotation only: same units
 
 
+def mesh_objects():
+    return [o for o in bpy.data.objects if o.type == "MESH" and o.name.startswith("DA3_mesh")]
+
+
+def style_mesh(objs):
+    """The TSDF mesh with its own vertex colours as emission (true colours, not lit by the background)."""
+    for o in objs:
+        attrs = o.data.color_attributes
+        if not len(attrs):
+            print(f"[turntable] {o.name} has no vertex colours: keeping its imported material")
+            continue
+        name = attrs[0].name
+        mat = bpy.data.materials.get(f"DA3_mesh_color_{name}") or bpy.data.materials.new(f"DA3_mesh_color_{name}")
+        mat.use_nodes = True
+        nt = mat.node_tree
+        nt.nodes.clear()
+        attr = nt.nodes.new("ShaderNodeAttribute")
+        attr.attribute_name = name
+        em = nt.nodes.new("ShaderNodeEmission")
+        out = nt.nodes.new("ShaderNodeOutputMaterial")
+        nt.links.new(attr.outputs["Color"], em.inputs["Color"])
+        nt.links.new(em.outputs["Emission"], out.inputs["Surface"])
+        o.data.materials.clear()
+        o.data.materials.append(mat)
+
+
 # ----------------------------------------------------------------------------- render settings
 def setup_render(scene, cam, cfg, out_dir):
     scene.camera = cam
@@ -397,7 +452,7 @@ def setup_render(scene, cam, cfg, out_dir):
     bg.inputs["Color"].default_value = (*color_rgb(cfg["background"]), 1.0)
     bg.inputs["Strength"].default_value = 1.0
 
-    keep = ("DA3_points",) + (("DA3_mesh",) if cfg["with_mesh"] else ())
+    keep = {"points": ("DA3_points",), "mesh": ("DA3_mesh",), "both": ("DA3_points", "DA3_mesh")}[cfg["show"]]
     for o in scene.objects:
         if o.type in ("MESH", "CURVE", "CURVES", "POINTCLOUD", "VOLUME", "SURFACE", "META", "FONT"):
             o.hide_render = not o.name.startswith(keep)
@@ -444,7 +499,14 @@ def main():
     scene = bpy.context.scene
     pts = bpy.data.objects["DA3_points"]
     P, n_total = point_cloud_world(pts)
-    info = analyse(P, *photo_cameras())
+    # clutter crop: around the median, relative to the 90th-percentile distance (sky / far background)
+    med = np.median(P, axis=0)
+    r90 = max(float(np.percentile(np.linalg.norm(P - med, axis=1), 90)), 1e-6)
+    crop = cfg["crop"] * r90 if cfg["crop"] else None
+    keep = P if crop is None else P[np.linalg.norm(P - med, axis=1) <= crop]
+    # framing: middle of the subject and the size that keeps all of it (97%) in the picture
+    center, size = subject_frame(keep)
+    info = analyse(keep, *photo_cameras(), center=center, radius=size)
     if cfg["mode"] in MODE_DEFAULTS and cfg["mode"] != info["mode"]:
         if cfg["mode"] == "inside" and "origin" not in info:
             info["origin"] = info["center"]
@@ -454,17 +516,29 @@ def main():
             info["coverage"] = 2 * math.pi
     cam, cam_start, hfov, frames, motion = build_rig(scene, info, cfg)
 
-    crop = cfg["crop"] * info["radius"] if cfg["crop"] else None
-    keep = P if crop is None else P[np.linalg.norm(P - info["center"], axis=1) <= crop]
+    if cfg["show"] not in ("points", "mesh", "both"):
+        print(f"[turntable] unknown show={cfg['show']!r}: using 'points'")
+        cfg["show"] = "points"
+    meshes = mesh_objects()
+    if cfg["show"] in ("mesh", "both") and not meshes:
+        print("[turntable] no DA3_mesh in the scene (mesh.glb missing?): showing the points")
+        cfg["show"] = "points"
+    if cfg["show"] in ("mesh", "both"):
+        style_mesh(meshes)
+
     spacing = median_spacing(keep, n_total * len(keep) / max(len(P), 1))
+    footprint = photo_pixel_footprint(keep, photo_cameras()[0], d)
     pixel = 2 * float(np.median(np.linalg.norm(keep - cam_start, axis=1))) * math.tan(hfov / 2) / cfg["resolution"][0]
-    radius = max(0.75 * spacing, 0.6 * pixel) * cfg["point_scale"]
-    style_points(pts, radius, info["center"], crop)
+    # dots large enough to close the gaps between the rows of each photo's pixel grid (footprint),
+    # never smaller than the neighbour spacing or ~1 pixel of the video
+    radius = max(0.9 * footprint, 0.75 * spacing, 0.6 * pixel) * cfg["point_scale"]
+    style_points(pts, radius, med, crop)
     video = setup_render(scene, cam, cfg, d)
 
-    print(f"[turntable] mode: {info['mode']} ({info['why']}); motion: {motion}")
+    print(f"[turntable] mode: {info['mode']} ({info['why']}); motion: {motion}; showing {cfg['show']}")
     print(f"[turntable] subject size {info['radius']:.3f}, point radius {radius:.5f} "
-          f"(spacing {spacing:.5f}, 1 px = {pixel:.5f}), crop {'off' if crop is None else f'{crop:.3f}'}; "
+          f"(photo pixel {footprint:.5f}, spacing {spacing:.5f}, video pixel {pixel:.5f}), "
+          f"crop {'off' if crop is None else f'{crop:.3f}'}; "
           f"{frames} frames at {cfg['fps']} fps, {cfg['resolution'][0]}x{cfg['resolution'][1]}")
     if not cfg["render"]:
         print("[turntable] camera ready (render = False): View > Cameras > Active Camera, then Space to play")

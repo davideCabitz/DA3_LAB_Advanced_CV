@@ -35,6 +35,7 @@ import torch
 
 from da3.camera import affine_inverse, to_homogeneous
 from da3.export import (
+    depth_edge_mask,
     depth_mesh,
     fuse_point_cloud,
     tsdf_mesh,
@@ -95,6 +96,9 @@ def main():
     ap.add_argument("--cameras-from", choices=["head", "ray"], default="head",
                     help="which predicted cameras drive the point cloud / exports (both are saved)")
     ap.add_argument("--conf-percentile", type=float, default=40.0)
+    ap.add_argument("--edge-rtol", type=float, default=0.05,
+                    help="drop 'flying pixels' at depth edges (3x3 depth range > rtol x depth) from the "
+                         "point cloud and the mesh; 0 = keep them")
     ap.add_argument("--mesh", choices=["tsdf", "depth", "none"], default="tsdf")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
@@ -181,7 +185,10 @@ def reconstruct(paths, out: Path, args, model, setting, package: bool = True):
     (out / "cameras.json").write_text(json.dumps(cams, indent=2))
 
     # ---- point cloud, cameras, mesh
-    P, C = fuse_point_cloud(points, rgb, conf, args.conf_percentile)
+    # pixels kept for the 3D outputs: not on a depth edge (flying pixels) and confident enough
+    edge = depth_edge_mask(depth.numpy(), args.edge_rtol) if args.edge_rtol > 0 else np.zeros(conf.shape, bool)
+    not_edge = ~edge
+    P, C = fuse_point_cloud(points, rgb, conf, args.conf_percentile, mask=not_edge)
     write_ply(out / "points.ply", P, C)
     write_transforms_json(out / "transforms.json", w2c_use.numpy(), K_use.numpy(), (H, W),
                           [f"images/{n}" for n in names], {"cameras_used": source})
@@ -194,12 +201,14 @@ def reconstruct(paths, out: Path, args, model, setting, package: bool = True):
         v = None
         if args.mesh == "tsdf":
             try:
-                v, f, c = tsdf_mesh(depth.numpy(), rgb, K_use.numpy(), w2c_use.numpy())
+                # same pixels as the point cloud: depth 0 = not integrated (edges, low confidence)
+                good = not_edge & (conf >= np.percentile(conf[not_edge], args.conf_percentile))
+                v, f, c = tsdf_mesh(np.where(good, depth.numpy(), 0.0), rgb, K_use.numpy(), w2c_use.numpy())
                 mesher = "tsdf"
             except (ImportError, RuntimeError) as e:  # no Open3D, or a broken TSDF in this Open3D build
                 print(f"[infer] TSDF meshing unavailable ({e}); using depth-grid meshing instead")
         if v is None:
-            v, f, c = depth_mesh(points, rgb, conf, args.conf_percentile)
+            v, f, c = depth_mesh(points, rgb, conf, args.conf_percentile, mask=not_edge)
             mesher = "depth-grid"
         v = v * np.array([1.0, -1.0, -1.0])  # OpenCV world -> glTF (y up, z towards the viewer)
         mesh_info = write_glb(out / "mesh.glb", v, f, c)
@@ -216,6 +225,7 @@ def reconstruct(paths, out: Path, args, model, setting, package: bool = True):
            for a, b in zip(w2c_head[0].cpu().numpy(), w2c_ray[0].cpu().numpy())]
     summary = {"views": N, "size_hw": [H, W], "forward_s": dt, "device": args.device, "setting": setting,
                "weights": args.weights, "points": int(len(P)), "mesh_vertices_faces": mesh_info, "mesher": mesher,
+               "edge_rtol": args.edge_rtol, "edge_pixels_removed_pct": float(100 * edge.mean()),
                "cameras_used": source, "median_rel_diff_points_head_vs_ray": float(np.median(rel)),
                "max_rot_diff_head_vs_ray_deg": max(rot)}
     (out / "summary.json").write_text(json.dumps(summary, indent=2))
