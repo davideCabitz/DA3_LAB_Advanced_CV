@@ -146,6 +146,62 @@ image in alphabetical order) defines the world frame.
    - Camera 0 sits at the origin, looking along +Y, with +Z up.
 5. You can also run it from a terminal: `blender --python blender_import.py -- --dir <unzipped folder>`.
 
+### 5b. A rotating video for slides (`blender_turntable.py`)
+
+The zip also contains `blender_turntable.py`. Zips made before 2026-11-24 don't have it: copy
+`scripts/blender_turntable.py` from the repo into the unzipped folder. It renders a short looping
+video, `turntable_<mode>.mp4`, into the same folder.
+
+**The camera motion is chosen from your photos** (`mode = "auto"`):
+
+| Your photos | Mode | Motion |
+|---|---|---|
+| All around the subject (you walked around a statue / a building) | `orbit` | full 360° turn |
+| One side only (a façade, a palace front, a statue from 3–4 photos) | `arc` | smooth back-and-forth swing over the photographed side, so the empty back is never shown |
+| From inside, facing outwards (a room, a pizzeria, a square from one spot) | `inside` | the camera stands where you stood and pans: 360° if the photos cover all around, otherwise a swing, with a wide lens |
+
+**What is set automatically:**
+- the centre of the point cloud, ignoring far sky points;
+- points farther than `crop` × the subject size are hidden (sky shells, stray background; the
+  files are not changed);
+- the scene upright, using your photos' "up" direction;
+- the start on the side you photographed from;
+- the point size from the measured point spacing, at least about 1 pixel in the video (no gaps,
+  no flicker);
+- true colours, whatever the background.
+
+The output is H.264 MP4, which plays in PowerPoint, Google Slides and browsers.
+
+**Running it:**
+- **In Blender:** after `blender_import.py`, **Scripting → Open** `blender_turntable.py` → **Run Script**.
+  - Blender looks frozen while it renders, for a few minutes. The video appears in the folder.
+  - The System Console (**Window → Toggle System Console**) prints the chosen mode and why.
+  - Settings are in `CONFIG` at the top of the script:
+    - `mode` (`"auto"`, `"orbit"`, `"arc"`, `"inside"`);
+    - `seconds`, `resolution`, `background` (`"white"`, `"black"` or `"#RRGGBB"`);
+    - `zoom` (larger = closer), `elevation`, `lens`;
+    - `point_scale` (bigger points), `crop` (`None` keeps all points);
+    - `with_mesh`, `transparent` (PNG frames with alpha).
+  - Set `render = False` to preview first: **View → Cameras → Active Camera**, then press **Space**
+    to play.
+- **From a terminal, without opening Blender** (import + video in one command):
+  `blender -b --python blender_import.py --python blender_turntable.py -- --dir <unzipped folder> --background white`.
+  Add e.g. `--mode arc --seconds 10 --zoom 1.5` to override the defaults.
+- **In the slides:** **Insert → Video** → `turntable_<mode>.mp4`, set to start automatically and loop.
+  The loop is seamless.
+
+**If it doesn't look right:**
+
+| Problem | Fix |
+|---|---|
+| The subject is too small or too big | change `zoom` |
+| Gaps between points | raise `point_scale` to 1.5–2 |
+| Blobs | lower `point_scale` to 0.6 |
+| Sky or background clutter | lower `crop` to 1.5 |
+| Parts of the subject are cut off | raise `crop` to 3, or set it to `None` |
+| Wrong kind of motion | set `mode` by hand |
+| Interior seen from outside | `mode = "inside"` |
+
 ## 6. How to get good results
 
 Multi-view photos:

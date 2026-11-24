@@ -97,7 +97,7 @@ see [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md) §4–5.
   - `enhancements/`: one sub-package per enhancement of the frozen DA3; `self_audit/` = enhancement #1 (signals, audit model, pose-source choice/fusion, triple-collocation calibration, dump hook for the benchmark adapter); `foveated/` = enhancement #2 (mixed per-view resolution routing, bit-identical to DA3 at equal resolution, attention-mass balancing, focus selection / token budgets, harness adapter, virtual zoom cameras).
   - `model.py`: full DA3 network; `config.py`: model/train configs.
 - `configs/`: YAML configs (model size, resolution, views, pose conditioning, training).
-- `scripts/`: entry points (train, eval, infer, parity, checkpoint conversion, Blender import).
+- `scripts/`: entry points (train, eval, infer, parity, checkpoint conversion, Blender import, Blender turntable video).
 - `tests/`: pytest unit tests (`pytest -q`).
 - `notebooks/`: thin Kaggle notebooks (00_setup, 01_parity, 02_train, 03_eval, 04_demo_export (+ 04_demo_export_colab: the same demo on Google Colab), 05_self_audit (+ 05_self_audit_colab), 06_foveated, 09_compare_all; 07 reserved for enhancement #3); all logic stays in `src/` and `scripts/`.
 - `experiments/`: experiment registry (config, seed, commit, metrics per run); `experiments/results/` holds the standard result records (copied from the Kaggle outputs and committed by the user).

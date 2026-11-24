@@ -17,6 +17,8 @@ Outputs in --out:
   mesh.glb                TSDF (Open3D) or depth-grid mesh, glTF axes (y up)
   preview.png             RGB / depth / confidence strip
   blender_import.py + <out>.zip   everything packaged for Blender
+  blender_turntable.py    optional: renders a looping showcase video (turntable_<mode>.mp4) after the import;
+                          orbit / arc / inside motion chosen from the photo cameras
 """
 
 from __future__ import annotations
@@ -220,6 +222,7 @@ def reconstruct(paths, out: Path, args, model, setting, package: bool = True):
     print(json.dumps(summary, indent=2))
 
     shutil.copy(REPO / "scripts" / "blender_import.py", out / "blender_import.py")
+    shutil.copy(REPO / "scripts" / "blender_turntable.py", out / "blender_turntable.py")
     if package:
         print("package:", shutil.make_archive(str(out), "zip", root_dir=out))
 
