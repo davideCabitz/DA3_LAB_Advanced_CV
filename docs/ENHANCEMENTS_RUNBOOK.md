@@ -7,6 +7,7 @@ enhancements. The enhancements, their novelty check and the plan are in
 | Notebook | What it does | Accelerator |
 |---|---|---|
 | `05_self_audit` | Enhancement #1, DA3 Self-Audit: original DA3 vs DA3 + Self-Audit | GPU (one pass per model), the rest CPU |
+| `05_self_audit_colab` | the same, on Google Colab (§2b) | Colab T4 GPU |
 | `06_foveated` | Enhancement #2, Foveated DA3: mixed per-view resolutions in one pass (view level + region zoom) | GPU; region zoom in its own session |
 | `07_…` | reserved for enhancement #3 (pose-conditioned self-distillation) | – |
 | `09_compare_all` | original DA3 vs every enhancement, from the saved result records | None (CPU) |
@@ -67,6 +68,32 @@ experiments/results/<enhancement>/<tag>.json
    2. Then start a CPU session with `PHASE = "analyse"` and
       `RESUME_FROM = "/kaggle/input/<that version>"` (attach it as input first).
    3. The analysis downloads DA3-BENCH again, because the harness needs the GT meshes.
+
+## 2b. Run 05 on Google Colab instead (`05_self_audit_colab`)
+
+Use it when the Kaggle GPU queue is too long. Same scripts, same results, same record format, so
+its records go into `experiments/results/` and appear in 09 like the Kaggle ones.
+
+1. **Push the repo**, then on colab.research.google.com: **File → Upload notebook** →
+   `notebooks/05_self_audit_colab.ipynb`.
+2. **Runtime → Change runtime type → T4 GPU.** Private repo: **key icon (Secrets)** →
+   `GITHUB_TOKEN`, with **Notebook access** on.
+3. **Runtime → Run all**, and allow Google Drive access. After each model, the notebook copies the
+   summary, figures and records to `DRIVE_DIR` (default `MyDrive/DA3/self_audit_colab`). The last
+   cell saves `self_audit_results.zip` there.
+4. **Same order as on Kaggle:**
+   - first the quick check (`MAX_SCENES = 2`, the default);
+   - then `MAX_SCENES = 0`, **one model per session** (`["da3-small"]`, then `["da3-base"]`).
+5. **Free Colab limits:**
+   - About 12 GB of RAM and 2 CPU cores. The TSDF scoring runs on the CPU and is slower than on
+     Kaggle; `FUSION_WORKERS = 2` keeps it within RAM.
+   - Sessions disconnect when idle or after a few hours. For a full run, split it:
+     1. `PHASE = "infer"` with `KEEP_DUMP_ON_DRIVE = True`. This is the GPU part; the exports and
+        dumps (several GB) are saved to Drive.
+     2. A new session with `PHASE = "analyse"` and `RESUME_FROM_DRIVE = True`. It downloads the
+        benchmark data again and continues from the saved dump.
+6. **Don't mix GPU types** in one comparison: run everything you compare on a T4, on Kaggle or on
+   Colab. The pose and reconstruction metrics don't depend on the platform, but timings do.
 
 ## 3. Run `06_foveated`
 

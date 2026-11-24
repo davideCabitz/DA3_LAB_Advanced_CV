@@ -10,7 +10,8 @@ no training) on example images and on your own photos. It produces:
   the depth and ray panels in Fig. 2 of the paper.
 
 Everything runs on Kaggle; nothing needs to be installed on your computer except Blender (to look
-at the result).
+at the result). If the Kaggle GPU queue is too long, the same demo runs on **Google Colab**
+(`notebooks/04_demo_export_colab.ipynb`, §8).
 
 ---
 
@@ -183,3 +184,41 @@ Single images: any photo works; depth is relative (no metric scale).
 - ❌ **Don't** use DA3-LARGE / GIANT outputs commercially (CC BY-NC).
 - ❌ **Don't** close an interactive session before downloading the zips. Use *Save & Run All* if
   unsure.
+
+## 8. The same demo on Google Colab
+
+`notebooks/04_demo_export_colab.ipynb` does what `04_demo_export` does (same scripts, same outputs,
+same Blender zip), for Google Colab instead of Kaggle.
+
+1. **Push the repo**: the notebook clones `main`, as on Kaggle.
+2. **Open the notebook in Colab:** colab.research.google.com → **File → Upload notebook** → choose
+   `notebooks/04_demo_export_colab.ipynb`. Or use **GitHub** and pick the repo; a private repo
+   needs GitHub access granted to Colab.
+3. **GPU:** **Runtime → Change runtime type → T4 GPU**. The notebook asks for it; check that it is
+   selected. The first code cell stops with a clear message if there is no GPU.
+4. **Private repo:** in the left bar, open the **key icon (Secrets)**, add `GITHUB_TOKEN` (the same
+   token as on Kaggle) and switch on **Notebook access**.
+5. **Your photos.** Choose one:
+   - **Google Drive (recommended):** put the folder with the photos in your Drive, e.g.
+     `MyDrive/DA3/building/`, and set `MY_MULTIVIEW = "/content/drive/MyDrive/DA3/building"`.
+     When the notebook asks for Drive access, allow it.
+   - **Upload a zip:** set `PHOTOS_FROM = "upload"`. Run the notebook, then choose the `.zip` of
+     your photo folder when the upload button appears.
+6. **Options**, in the same cell as on Kaggle:
+   - `WEIGHTS`: Base by default; Small is faster.
+   - `EXTRA_ARGS`: `--conf-percentile 60` by default, good for buildings with sky; add
+     `--max-views 60` if you get "CUDA out of memory".
+   - `RUN_EXAMPLES = True` also reconstructs the two built-in examples.
+7. **Runtime → Run all.** The results are in `/content/demo/<name>/` and `<name>.zip`.
+8. **Keep the results.** Colab deletes `/content` when the session ends. The last cell copies the
+   zips to Drive (`SAVE_TO_DRIVE`, default `MyDrive/DA3/results`). With `SAVE_TO_DRIVE = ""` it
+   downloads them instead.
+
+Colab specifics:
+- Free sessions disconnect after some idle time or after a few hours, and GPUs are not always
+  available. Keep the tab open while it runs.
+- Enhancement #1 also has a Colab version (`05_self_audit_colab`, see
+  [ENHANCEMENTS_RUNBOOK.md](ENHANCEMENTS_RUNBOOK.md) §2b). The other benchmark notebooks (03, 06)
+  download tens of GB and run for hours; they stay on Kaggle.
+- Paths that start with `/content/drive/MyDrive/...` are Drive folders; check them in the
+  **Files** panel on the left.
