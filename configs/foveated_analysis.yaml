@@ -1,0 +1,44 @@
+# Pre-registered statistical analysis plan, enhancement #2 (Foveated DA3).
+# Fixed on 2026-11-22, BEFORE any Kaggle run of notebooks/06_foveated (the git history is the
+# timestamp). Read by `scripts/foveated_eval.py probe | zoom | analyse`; its SHA-256 is stored in
+# every result record, so a later change of the plan is visible. Reasons for every choice:
+# docs/FOVEATED_ANALYSIS_PLAN.md. Do NOT edit after the results are in; a new plan = a new version.
+version: 1
+
+ci_level: 0.95                 # two-sided CIs; a decision on a CI bound = one-sided test at 2.5%
+bootstrap:
+  n: 4000
+  seed: 0                      # resampling unit: the scene (cluster bootstrap)
+
+margin:
+  prereg: 0.03                 # relative tolerance of every non-inferiority / equivalence statement
+                               # (report §4.3: "within 3%"); one tolerance for depth and pose
+  rule: max_prereg_noise       # margin used = max(prereg, A/A noise floor); "prereg" = prereg only
+  cap_factor: 2.0              # the data-informed margin never exceeds 2 x prereg (6%): a noisier
+                               # measurement gives wider CIs (INCONCLUSIVE), never a looser criterion
+
+split:                         # only for analyses that SELECT something (G3 rescue)
+  dev_fraction: 0.5
+  seed: 0                      # stratified by dataset; the test half is never used for selection
+
+probe:
+  hi: u504                     # full resolution (the original DA3)
+  lo: u252                     # quarter of the tokens
+  aa: u504_aa                  # A/A: full resolution, only the reference view changed (treatment-blind)
+  focus_only: focus_only       # the focus views alone, without the context views (G1b)
+  primary: fov50_504-252       # G3 primary configuration (report §4.3: 8 at 504 px + 8 at 252 px)
+  mitigations:                 # G3 secondary (report's mitigation + ours), simultaneous CIs
+    - fov50_504-280
+    - fov50_504-252_bal
+  focus_seeds:                 # robustness: random focus views instead of evenly spaced ones
+    - fov50_504-252_random1
+    - fov50_504-252_random2
+    - fov50_504-252_random3
+
+zoom:
+  primary_method: zoom_posed_da3cams   # zoom view through E_c with DA3's own cameras
+  reference: global_896                # global pass at 896 px
+  max_ratio: 0.90                      # report §4.3: region AbsRel >= 10% better than global 896 px
+  rv_max_deg: 1.0                      # report §4.3: R_v recovered within 1 degree (median, camera head)
+  primary_selector: oracle             # report §4.3: oracle regions (feasibility gate)
+  secondary_selectors: [random, texture]   # deployable region choices (no GT preference)

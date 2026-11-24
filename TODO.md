@@ -10,7 +10,7 @@ Strategy: **baseline = released DA3 weights**; enhancements are measured against
 - [x] Parity DA3-SMALL / DA3-BASE vs official code (local CPU: depth ≤ 1.9e-5)
 - [x] Benchmark adapter on the released harness; our metrics = official to round-off
 - [!] Kaggle account (phone-verified), repo pushed, notebooks imported (runbook Step 0)
-- [!] `00_setup`: Kaggle limits, 25 unit tests, GPU sanity checks
+- [!] `00_setup`: Kaggle limits, unit tests (87 on 2026-11-22), GPU sanity checks
 - [!] `01_parity` on GPU
 - [!] `03_eval` timing run (HiRoom, 2 scenes)
 - [!] `03_eval` main run: HiRoom, 7Scenes, DTU-64 (all scenes), DA3-SMALL + DA3-BASE
@@ -30,7 +30,14 @@ Top 3 from the multi-agent study (docs/da3_enhancement_report.md §4–5). Run t
   - [!] `00_setup` on Kaggle: the new unit tests must pass (pytest runs all tests)
   - [!] `05_self_audit` with `MAX_SCENES = 2` (end-to-end check), then `MAX_SCENES = 0`; share `summary.md` + gates
   - [ ] copy `self_audit/results/*` into `experiments/results/` and commit; fill reports/enhancement_1_self_audit.md
-- [ ] #2 Foveated DA3 (training-free): mixed-resolution routing (bit-exact at equal resolution), cross-scale probe, zoom views
+- [~] #2 Foveated DA3 (training-free): implemented (`src/da3/enhancements/foveated/`, `scripts/foveated_eval.py`,
+      `eval_bench.py --foveated / --process-res / --meter`, notebook `06_foveated`, tests `tests/test_foveated.py`):
+      mixed-resolution routing (bit-identical at equal resolution), attention-mass balancing, probe (gates 1 + 3),
+      large-view protocol, Sec. 6 runs with per-view analysis, region zoom on ETH3D (gate 2); pre-registered
+      statistics (docs/FOVEATED_ANALYSIS_PLAN.md: scene-bootstrap CIs, three-way gates, A/A noise floor)
+  - [!] `06_foveated` quick check (`MAX_SCENES = 2`, pose only), then session 1 (view level) and session 2 (zoom);
+        share `summary.md` + `gates.json`
+  - [ ] copy `foveated/results/*` into `experiments/results/` and commit; fill reports/enhancement_2_foveated.md
 - [ ] #3 Pose-conditioned self-distillation (LoRA, 1-2 sessions): needs a few KITTI raw drives (user download);
       controls: pose-only LoRA, own-output LoRA, Free Geometry
 - [~] enhancement: motion-robust DA3 (docs/DYNAMIC_SCENES.md §4): C2 masked ray-map poses, C3 key-masking study,

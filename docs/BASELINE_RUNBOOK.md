@@ -69,7 +69,8 @@ session stops after about 12 h.
 - `env_report.json`: a GPU is listed (T4 ~15 GB or P100 16 GB), `sdpa_fp16_ok: true`, and the
   `internet` entry has an HTTP 200 status line. **Note the free disk space of `/tmp`**; it decides
   which benchmark datasets fit in one session.
-- `pytest.txt` ends with `25 passed`.
+- `pytest.txt` ends with `87 passed` and no failures (the count grows when tests are added; it
+  was 87 on 2026-11-22, with the enhancement tests).
 - The overfit cell: the total loss drops from ~8 to well below 1 within 150 steps.
 - `resume_check.json`: `"identical": true`.
 

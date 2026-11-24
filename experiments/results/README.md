@@ -7,7 +7,7 @@ experiments/results/<enhancement>/<tag>.json      (schema "da3-result/1", see sr
 ```
 
 - **Where they come from.** The Kaggle notebooks write them to `/kaggle/working/<…>/results/`.
-  Copy those folders here, keeping the sub-folders (`baseline/`, `self_audit/`, …), and commit
+  Copy those folders here, keeping the sub-folders (`baseline/`, `self_audit/`, `foveated/`, …), and commit
   them.
 - **Who reads them.** `notebooks/09_compare_all` and `scripts/compare_results.py` read every
   record in this folder and compare the original DA3 with all enhancements. Runs are only compared

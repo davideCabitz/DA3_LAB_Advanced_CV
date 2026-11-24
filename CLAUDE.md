@@ -81,7 +81,8 @@ see [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md) §4–5.
 - [docs/KAGGLE_EXAMPLES.md](docs/KAGGLE_EXAMPLES.md): examples and personal photos on Kaggle (multi-view, per-image depth + ray maps, Blender).
 - [docs/DYNAMIC_SCENES.md](docs/DYNAMIC_SCENES.md): planned enhancement "motion-robust DA3" for dynamic scenes, with the prior-work check (Dyna3, VGGT4D, ...), what is still open, evaluation protocol and honest-claims list.
 - [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md): multi-agent enhancement study on a frozen DA3 (35 ideas, clusters and impact, novelty check with references; top 3 = Self-Audit, Foveated DA3, pose-conditioned self-distillation; interactions and implementation order).
-- [docs/ENHANCEMENTS_RUNBOOK.md](docs/ENHANCEMENTS_RUNBOOK.md): how to run the enhancement notebooks (05_self_audit, 09_compare_all), save the result records, and the record contract every enhancement follows.
+- [docs/ENHANCEMENTS_RUNBOOK.md](docs/ENHANCEMENTS_RUNBOOK.md): how to run the enhancement notebooks (05_self_audit, 06_foveated, 09_compare_all), save the result records, and the record contract every enhancement follows.
+- [docs/FOVEATED_ANALYSIS_PLAN.md](docs/FOVEATED_ANALYSIS_PLAN.md): pre-registered statistical analysis plan of enhancement #2 (constants in `configs/foveated_analysis.yaml`; do not edit after results; deviations are logged there).
 - [TODO.md](TODO.md): running task list for the phases.
 - `src/da3/`: our implementation (installable with `pip install -e .`).
   - `backbone/`: DINOv2 ViT with within-view / cross-view token reordering, RoPE, QK-norm, camera tokens.
@@ -93,14 +94,14 @@ see [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md) §4–5.
   - `eval/`: pose AUC, RANSAC pose alignment, TSDF fusion, Chamfer / F1, benchmark loaders.
   - `export/`: PLY, transforms.json (NeRF/COLMAP style), GLB.
   - `compare/`: standard result record (`experiments/results/<enhancement>/<tag>.json`, schema `da3-result/1`), comparison tables (differences to the original DA3, only within one protocol: same weights, datasets, scenes, frame sampling) and plots.
-  - `enhancements/`: one sub-package per enhancement of the frozen DA3; `self_audit/` = enhancement #1 (signals, audit model, pose-source choice/fusion, triple-collocation calibration, dump hook for the benchmark adapter).
+  - `enhancements/`: one sub-package per enhancement of the frozen DA3; `self_audit/` = enhancement #1 (signals, audit model, pose-source choice/fusion, triple-collocation calibration, dump hook for the benchmark adapter); `foveated/` = enhancement #2 (mixed per-view resolution routing, bit-identical to DA3 at equal resolution, attention-mass balancing, focus selection / token budgets, harness adapter, virtual zoom cameras).
   - `model.py`: full DA3 network; `config.py`: model/train configs.
 - `configs/`: YAML configs (model size, resolution, views, pose conditioning, training).
 - `scripts/`: entry points (train, eval, infer, parity, checkpoint conversion, Blender import).
 - `tests/`: pytest unit tests (`pytest -q`).
-- `notebooks/`: thin Kaggle notebooks (00_setup, 01_parity, 02_train, 03_eval, 04_demo_export, 05_self_audit, 09_compare_all; 06/07 reserved for enhancements #2/#3); all logic stays in `src/` and `scripts/`.
+- `notebooks/`: thin Kaggle notebooks (00_setup, 01_parity, 02_train, 03_eval, 04_demo_export, 05_self_audit, 06_foveated, 09_compare_all; 07 reserved for enhancement #3); all logic stays in `src/` and `scripts/`.
 - `experiments/`: experiment registry (config, seed, commit, metrics per run); `experiments/results/` holds the standard result records (copied from the Kaggle outputs and committed by the user).
-- `reports/`: write-ups (baseline.md, enhancement_1_self_audit.md).
+- `reports/`: write-ups (baseline.md, enhancement_1_self_audit.md, enhancement_2_foveated.md).
 
 Setting tags for every reported number: **[paper]**, **[official]** (released weights run by us), **[reduced-scale]** (our training).
 

@@ -25,6 +25,11 @@ Enhancement hooks:
   official RANSAC ray poses + E_c re-pass). The exported results are unchanged.
 * `--eval-only`: score exports that already exist in <work-root>/workspace/evaluation/<tag>
   (e.g. pose-source variants written by scripts/self_audit_eval.py). No model is loaded.
+* `--process-res R`: run the original DA3 at another uniform resolution (default 504, the paper's).
+* `--meter`: also write per-scene efficiency meta (tokens, time, peak memory) next to each export;
+  predictions unchanged (enhancement #2 uses it for the uniform-resolution rows).
+* `--foveated SPEC`: enhancement #2, Foveated DA3: mixed per-view resolutions in one pass, e.g.
+  "fraction=0.25,focus_res=504,context_res=252[,balance=1]" (da3.enhancements.foveated).
 """
 
 from __future__ import annotations
@@ -113,8 +118,13 @@ def main():
     ap.add_argument("--results-root", default=str(REPO / "experiments" / "results"))
     ap.add_argument("--dump-audit", action="store_true", help="write the Self-Audit dump (enhancement #1)")
     ap.add_argument("--no-repass", action="store_true", help="with --dump-audit: skip the E_c re-pass")
+    ap.add_argument("--process-res", type=int, default=504, help="uniform processing resolution (longest side)")
+    ap.add_argument("--meter", action="store_true", help="write per-scene efficiency meta (enhancement #2)")
+    ap.add_argument("--foveated", default="", help="enhancement #2 spec, e.g. 'fraction=0.25,context_res=252'")
     ap.add_argument("--notes", default="")
     args = ap.parse_args()
+    if args.foveated and (args.dump_audit or args.engine != "ours"):
+        ap.error("--foveated needs --engine ours and cannot be combined with --dump-audit")
 
     from da3.eval.harness import prepare_workspace
 
@@ -144,7 +154,20 @@ def main():
             from da3.enhancements.self_audit import AuditDumper
 
             dumper = AuditDumper(ray_solver=official_ray_solver, repass=not args.no_repass)
-        api = OursAsOfficialAPI(model, args.device, use_ray_pose=args.use_ray_pose, dumper=dumper)
+        if args.foveated:
+            from da3.enhancements.foveated import FoveationSpec
+            from da3.enhancements.foveated.adapter import FoveatedAPI
+
+            api = FoveatedAPI(model, args.device, spec=FoveationSpec.parse(args.foveated),
+                              use_ray_pose=args.use_ray_pose)
+        elif args.meter:
+            from da3.enhancements.foveated.adapter import MeteredAPI
+
+            api = MeteredAPI(model, args.device, process_res=args.process_res, use_ray_pose=args.use_ray_pose)
+            api.dumper = dumper
+        else:
+            api = OursAsOfficialAPI(model, args.device, use_ray_pose=args.use_ray_pose, dumper=dumper,
+                                    process_res=args.process_res)
     else:
         from depth_anything_3.api import DepthAnything3  # noqa: E402
 
@@ -168,10 +191,12 @@ def main():
 
     from da3.train_utils import append_registry, environment_info, git_commit
 
+    efficiency = api.summary() if hasattr(api, "summary") else {}
     summary = {
         "tag": args.tag, "setting": setting, "engine": args.engine, **winfo,
         "datasets": args.datasets, "modes": args.modes, "max_frames": args.max_frames,
         "scenes": scenes or "all", "use_ray_pose": args.use_ray_pose,
+        "process_res": args.process_res, "foveated": args.foveated or None, "efficiency": efficiency,
         "means": {k: v.get("mean") for k, v in metrics.items()},
         "per_scene": metrics, "metric_crosscheck_ours_vs_harness": cc,
         "time_inference_s": t_inf, "time_total_s": t_all,
@@ -185,12 +210,19 @@ def main():
     from da3.compare import make_record, protocol, save_record
 
     variant = args.variant or ("ray_dlt" if args.use_ray_pose else "head")
+    run_notes = [args.notes] if args.notes else []
+    if args.engine != "ours":
+        run_notes.append(f"engine={args.engine}")
+    if args.process_res != 504 and not args.foveated:
+        run_notes.append(f"process_res={args.process_res}")
+    if args.foveated:
+        run_notes.append(f"foveated: {args.foveated}")
     record = make_record(
         enhancement=args.enhancement, variant=variant, tag=args.tag, setting=setting, weights=args.weights,
         protocol=protocol(args.datasets, scenes or "all", args.max_frames, args.modes, "first"),
         sec6=summary["means"], sec6_per_scene=metrics, baseline_tag=args.baseline_tag,
-        commit=summary["commit"], env=summary["env"],
-        notes=args.notes + (f" engine={args.engine}" if args.engine != "ours" else ""),
+        extra={"efficiency": {"all": efficiency}} if efficiency else None,
+        commit=summary["commit"], env=summary["env"], notes="; ".join(run_notes),
     )
     rec_path = save_record(record, args.results_root)
     if dumper is not None and dumper.failures:
