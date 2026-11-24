@@ -66,6 +66,10 @@ def parse_args():
     ap.add_argument("--out-dir", default=None, help="figures / CSV / summary (default: outputs/self_audit/<tag>)")
     ap.add_argument("--variants", nargs="*", default=list(VARIANTS))
     ap.add_argument("--skip-sec6", action="store_true", help="no harness replays (A, C and our pose AUC only)")
+    ap.add_argument("--recon-variants", nargs="*", default=["ray_official", "audit_select", "audit_fuse"],
+                    help="variants also scored on reconstruction (TSDF, slow); the others get pose metrics only")
+    ap.add_argument("--keep-replay-exports", action="store_true",
+                    help="keep the copied exports of each variant (they duplicate the depth: large)")
     ap.add_argument("--fusion-workers", type=int, default=4)
     ap.add_argument("--tc-anchors", type=int, default=20000)
     ap.add_argument("--max-depth-samples", type=int, default=200000)
@@ -226,7 +230,12 @@ def part_b(scenes: list[dict], table: dict, features: list[str], a_res: dict) ->
     return {"poses": poses, "groups": groups, "per_scene": per_scene_auc, "official_ray_missing": n_fallback}
 
 
-def run_replays(args, scenes, poses, work_root: Path, modes=("pose", "recon_unposed")) -> list[str]:
+def run_replays(args, scenes, poses, work_root: Path) -> list[str]:
+    """Score every pose-source variant with the released harness (same depth, other cameras).
+    Reconstruction (TSDF, slow) only for --recon-variants; the others get pose metrics only. Each
+    variant's copied exports are deleted after scoring unless --keep-replay-exports (disk)."""
+    import shutil
+
     from da3.eval.harness import evaluation_dir, write_variant_exports
 
     tags = []
@@ -234,6 +243,7 @@ def run_replays(args, scenes, poses, work_root: Path, modes=("pose", "recon_unpo
         if v not in VARIANTS:
             print(f"[self-audit] unknown variant {v}, skipped")
             continue
+        modes = ("pose", "recon_unposed") if v in args.recon_variants else ("pose",)
         vtag = f"{args.baseline_tag}__{v}"
         vdir = evaluation_dir(work_root, vtag)
         for k, sc in enumerate(scenes):
@@ -246,9 +256,11 @@ def run_replays(args, scenes, poses, work_root: Path, modes=("pose", "recon_unpo
                "--enhancement", VARIANTS[v], "--variant", v, "--baseline-tag", args.baseline_tag,
                "--results-root", args.results_root, "--fusion-workers", str(args.fusion_workers),
                "--notes", f"replay of {args.baseline_tag}: same depth, cameras from '{v}'"]
-        print("[self-audit] harness replay:", vtag)
+        print(f"[self-audit] harness replay: {vtag} ({' + '.join(modes)})")
         subprocess.run(cmd, check=True, cwd=str(REPO))
         tags.append(vtag)
+        if not args.keep_replay_exports:
+            shutil.rmtree(vdir, ignore_errors=True)  # the record (with per-scene metrics) is already saved
     return tags
 
 

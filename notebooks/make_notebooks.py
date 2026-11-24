@@ -271,12 +271,13 @@ assert chk["legacy_tsdf_ok"], ("Open3D TSDF fusion is broken here, so reconstruc
                                "Stop and send open3d_check.json.")
 print("Open3D TSDF OK:", chk["open3d"])'''),
         md("### Configuration"),
-        code('''MODELS = ["da3-small", "da3-base"]          # released weights (Apache-2.0)
+        code('''MODELS = ["da3-small"]                      # full runs: ONE model per session ("da3-small", then "da3-base")
 DATASETS = ["hiroom", "7scenes", "dtu64"]   # add "eth3d", "scannetpp" in a later session (15 / 11 GB)
-MAX_SCENES = 0        # 0 = all scenes; e.g. 2 for a quick smoke test (labelled "limited")
+MAX_SCENES = 2        # 2 = quick end-to-end check (labelled "limited"); 0 = all scenes (the real numbers)
 PHASE = "all"         # "all" | "infer" (GPU: baseline run + dump) | "analyse" (CPU is enough)
-RESUME_FROM = ""      # output root of an earlier run of this notebook, e.g. "/kaggle/input/<name>"
-WORK = "/kaggle/working/eval_self_audit"    # harness exports + audit dumps
+RESUME_FROM = ""      # output root of an earlier "infer" run of this notebook, e.g. "/kaggle/input/<name>"
+WORK = "/tmp/eval_self_audit"               # harness exports + audit dumps (large, not saved)
+# split mode only: for PHASE = "infer" use WORK = "/kaggle/working/eval_self_audit" so the dump is saved
 OUT = "/kaggle/working/self_audit"          # figures, CSV, summaries
 RESULTS = f"{OUT}/results"                  # standard result records (commit these)
 BENCH = "/tmp/da3bench"

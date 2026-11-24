@@ -38,10 +38,16 @@ experiments/results/<enhancement>/<tag>.json
 1. **Push the repo** (the notebook clones `main`), then import `notebooks/05_self_audit.ipynb` on
    Kaggle.
 2. **Settings:** Accelerator = GPU (T4 or P100), Internet = on.
-3. **Configuration cell:** start with `MAX_SCENES = 2` for a quick end-to-end check, then use
-   `MAX_SCENES = 0` (all scenes) for the real numbers.
-   - Defaults: `MODELS = ["da3-small", "da3-base"]`, `DATASETS = ["hiroom", "7scenes", "dtu64"]`.
-   - ETH3D (15 GB) and ScanNet++ (11 GB) belong in a separate session, because of disk space.
+3. **Configuration cell:** the default is a quick end-to-end check (`MAX_SCENES = 2`,
+   `MODELS = ["da3-small"]`). For the real numbers set `MAX_SCENES = 0` and run **one model per
+   session**: `["da3-small"]`, then `["da3-base"]`, so each run stays well inside Kaggle's 12-hour
+   limit.
+   - `DATASETS = ["hiroom", "7scenes", "dtu64"]`. ETH3D (15 GB) and ScanNet++ (11 GB) belong in a
+     separate session, because of disk space.
+   - `WORK` (harness exports + dumps) is in `/tmp`, so it does not count against the 20 GB output
+     limit.
+   - Only the three main pose variants (`ray_official`, `audit_select`, `audit_fuse`) are also
+     scored on reconstruction (TSDF, slow). `ray_dlt` and the oracle get pose metrics only.
 4. **Save Version → Save & Run All.** The notebook runs these steps:
    1. **Original DA3 on the paper protocol + dump (GPU).** The released harness with camera-head
       poses. `--dump-audit` also saves the official RANSAC ray poses, our DLT ray poses, a pooled
@@ -54,10 +60,12 @@ experiments/results/<enhancement>/<tag>.json
       risk–coverage curves, depth-interval reliability, triple-collocation vs GT σ, audit
       coefficients, example flagged views.
    4. **Go/no-go gates** from the report (§4.2), printed as PASS / FAIL.
-5. **Splitting GPU and CPU work.** To save GPU quota, run with `PHASE = "infer"` on GPU and save
-   the version. Then start a CPU session with `PHASE = "analyse"` and
-   `RESUME_FROM = "/kaggle/input/<that version>"` (attach it as input first). The analysis
-   downloads DA3-BENCH again, because the harness needs the GT meshes.
+5. **Splitting GPU and CPU work (optional).** To save GPU quota:
+   1. Run with `PHASE = "infer"` and `WORK = "/kaggle/working/eval_self_audit"` on GPU, so the dump
+      is saved with the version.
+   2. Then start a CPU session with `PHASE = "analyse"` and
+      `RESUME_FROM = "/kaggle/input/<that version>"` (attach it as input first).
+   3. The analysis downloads DA3-BENCH again, because the harness needs the GT meshes.
 
 ## 3. Save the results (needed for 09)
 
