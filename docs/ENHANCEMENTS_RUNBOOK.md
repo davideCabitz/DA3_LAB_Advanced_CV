@@ -9,7 +9,7 @@ enhancements. The enhancements, their novelty check and the plan are in
 | `05_self_audit` | Enhancement #1, DA3 Self-Audit: original DA3 vs DA3 + Self-Audit | GPU (one pass per model), the rest CPU |
 | `05_self_audit_colab` | the same, on Google Colab (§2b) | Colab GPU (T4 → L4 → A100 → G4) |
 | `06_foveated` | Enhancement #2, Foveated DA3: mixed per-view resolutions in one pass (view level + region zoom) | GPU; region zoom in its own session |
-| `07_lora` | Enhancement #3 platform, part 0: LoRA checks on the GPU, KITTI conversion, E3 go/no-go, fountain reference (§3b) | GPU |
+| `07_lora` (+ `07_lora_colab`) | Enhancement #3 platform, part 0: LoRA checks on the GPU, KITTI conversion, E3 go/no-go, fountain reference (§3b) | GPU |
 | `09_compare_all` | original DA3 vs every enhancement, from the saved result records | None (CPU) |
 
 ## 1. How results are stored (the contract every enhancement follows)
@@ -209,6 +209,12 @@ Plan: [LORA.md](LORA.md); statistics: [LORA_ANALYSIS_PLAN.md](LORA_ANALYSIS_PLAN
 3. **Save Version → Save & Run All.** Parts: A platform check (stops with an error if LoRA off is not
    bit-identical to the released model), B conversion + `split.json`, C go/no-go, D fountain reference.
 4. **Send** `lora/lora_check.json` (measured memory per configuration) and `lora/gonogo_<model>.md`.
+5. **Resuming.** Every part is skipped when its result exists. Kaggle: attach the stopped version's
+   output and set `RESUME_FROM`. **Colab (`07_lora_colab`):** same checkpoint system as
+   `05_self_audit_colab`: progress (results + converted KITTI drives) is saved to `DRIVE_DIR` every
+   few minutes and after every part; after a disconnect reconnect and **Run all** without changing
+   anything. Put the KITTI zips and the fountain photos on Drive (`KITTI_RAW`, `FOUNTAIN`); the
+   notebook unpacks the zips itself.
    GO = the pose-conditioned DA3 has ≥ 5% lower AbsRel; NO-GO stops E3 (the platform stays).
 
 ## 4. Save the results (needed for 09)

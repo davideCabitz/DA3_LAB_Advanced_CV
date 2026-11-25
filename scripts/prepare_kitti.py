@@ -92,6 +92,8 @@ def main():
     ap.add_argument("--plan", default=str(REPO / "configs" / "lora_analysis.yaml"))
     ap.add_argument("--stride", type=int, default=1, help="keep every k-th frame (1 = all)")
     ap.add_argument("--split-only", action="store_true", help="write split.json for drives already converted")
+    ap.add_argument("--skip-existing", action="store_true",
+                    help="resume: keep drives whose cameras.json exists (written last, so it marks a complete drive)")
     args = ap.parse_args()
 
     import yaml
@@ -110,6 +112,11 @@ def main():
             raise SystemExit(f"calibration files (calib_cam_to_cam.txt, ...) missing for dates {missing}: "
                              f"also upload <date>_calib.zip from the KITTI raw page")
         for d in drives:
+            if args.skip_existing and (out / drive_id(d.name) / "cameras.json").exists():
+                meta = json.loads((out / drive_id(d.name) / "cameras.json").read_text())
+                stats[drive_id(d.name)] = {"frames": len(meta["frames"]), "skipped": "already converted"}
+                print(drive_id(d.name), "already converted, skipped", flush=True)
+                continue
             stats[drive_id(d.name)] = convert_drive(d, out / drive_id(d.name), calibs[drive_id(d.name)[:10]], args.stride)
             print(drive_id(d.name), stats[drive_id(d.name)], "(Eigen test drive)" if drive_id(d.name) in eigen else "",
                   flush=True)

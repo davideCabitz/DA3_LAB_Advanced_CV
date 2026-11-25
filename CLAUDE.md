@@ -103,7 +103,7 @@ see [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md) §4–5.
 - `configs/`: YAML configs (model size, resolution, views, pose conditioning, training).
 - `scripts/`: entry points (train, eval, infer, parity, checkpoint conversion, Blender import, Blender turntable video).
 - `tests/`: pytest unit tests (`pytest -q`).
-- `notebooks/`: thin Kaggle notebooks (00_setup, 01_parity, 02_train, 03_eval, 04_demo_export (+ 04_demo_export_colab: the same demo on Google Colab), 05_self_audit (+ 05_self_audit_colab), 06_foveated, 07_lora (enhancement #3: LoRA platform check, KITTI go/no-go, fountain reference), 09_compare_all); all logic stays in `src/` and `scripts/`.
+- `notebooks/`: thin Kaggle notebooks (00_setup, 01_parity, 02_train, 03_eval, 04_demo_export (+ 04_demo_export_colab: the same demo on Google Colab), 05_self_audit (+ 05_self_audit_colab), 06_foveated, 07_lora (+ 07_lora_colab, Drive checkpoints; enhancement #3: LoRA platform check, KITTI go/no-go, fountain reference), 09_compare_all); all logic stays in `src/` and `scripts/`.
 - `experiments/`: experiment registry (config, seed, commit, metrics per run); `experiments/results/` holds the standard result records (copied from the Kaggle outputs and committed by the user).
 - `reports/`: write-ups (baseline.md, enhancement_1_self_audit.md, enhancement_2_foveated.md).
 
