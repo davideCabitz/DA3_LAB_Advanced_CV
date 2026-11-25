@@ -65,8 +65,13 @@ os.chdir("/content/DA3_LAB_Advanced_CV")
 !pip install -q -r requirements.txt && pip install -q -e . --no-deps
 !git log -1 --format="commit %H  %cd"'''
 
-COLAB_OPEN3D = r'''# Open3D (TSDF meshing) + self-test: if TSDF fusion is broken here, infer.py uses a simpler mesher
-!pip install -q "open3d>=0.19.0"
+COLAB_OPEN3D = r'''# Open3D (TSDF meshing) + self-test: if TSDF fusion is broken here, infer.py uses a simpler mesher.
+# 0.19.0 is the version whose legacy TSDF works (0.20.0 returns empty meshes); it exists up to Python 3.12.
+import sys
+if sys.version_info[:2] <= (3, 12):
+    !pip install -q "open3d==0.19.0"
+else:
+    !pip install -q "open3d>=0.19.0"
 !python scripts/check_open3d.py --out /content/open3d_check.json'''
 
 COLAB_OFFICIAL = f'''# --- official DA3 repo (benchmark harness), pinned commit ---------------------------------------
@@ -77,8 +82,26 @@ if not os.path.exists("/content/Depth-Anything-3"):
 subprocess.run(["git", "-C", "/content/Depth-Anything-3", "checkout", "{OFFICIAL_COMMIT}"], check=True)
 OFFICIAL_SRC = "/content/Depth-Anything-3/src"
 !pip install -q -r requirements-eval.txt
+# Open3D: requirements-eval installs the newest one; 0.20.0's legacy TSDF returns empty meshes, so use the
+# verified 0.19.0 where it exists (Python <= 3.12)
+import sys
+if sys.version_info[:2] <= (3, 12):
+    !pip install -q "open3d==0.19.0"
 # Open3D self-test: does TSDF fusion (depth maps -> mesh) work in this environment?
 !python scripts/check_open3d.py --out /content/open3d_check.json'''
+
+RECON_CHECK = '''import json
+chk = json.load(open("__PATH__"))
+RECON = bool(chk["legacy_tsdf_ok"])   # reconstruction scores (F1 / Chamfer) need a working Open3D TSDF
+if RECON:
+    print("Open3D TSDF OK:", chk["open3d"], "-> reconstruction scores (F1 / Chamfer) included")
+else:
+    print("Open3D", chk["open3d"], "on Python", chk["python"], "has a broken TSDF fusion (known Open3D 0.20 bug, "
+          "github.com/isl-org/Open3D/issues/7592; the working 0.19.0 only exists up to Python 3.12).")
+    print("This run SKIPS the reconstruction scores (F1 / Chamfer). Pose accuracy (AUC), failure detection "
+          "and depth uncertainty are not affected.")
+MODES = "pose recon_unposed" if RECON else "pose"
+RECON_VARIANTS = "" if RECON else "--recon-variants"   # an empty list = pose-only harness replays'''
 
 COLAB_GPU = '''import torch
 !nvidia-smi -L
@@ -418,11 +441,7 @@ Outputs (in `/kaggle/working/`): `self_audit/<tag>/` (summary.md, figures, per_v
 `self_audit_results.zip`."""),
         code(SETUP),
         code(OFFICIAL),
-        code('''import json
-chk = json.load(open("/kaggle/working/open3d_check.json"))
-assert chk["legacy_tsdf_ok"], ("Open3D TSDF fusion is broken here, so reconstruction metrics would be wrong. "
-                               "Stop and send open3d_check.json.")
-print("Open3D TSDF OK:", chk["open3d"])'''),
+        code(RECON_CHECK.replace("__PATH__", "/kaggle/working/open3d_check.json")),
         md("### Configuration"),
         code('''MODELS = ["da3-small"]                      # full runs: ONE model per session ("da3-small", then "da3-base")
 DATASETS = ["hiroom", "7scenes", "dtu64"]   # add "eth3d", "scannetpp" in a later session (15 / 11 GB)
@@ -459,7 +478,7 @@ re-pass (DA3 conditioned on its own cameras). The exported depth / poses are unc
     for m in MODELS:
         t = tag_for(m)
         !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
-            --weights official:{m} --datasets {DS} --modes pose recon_unposed --max-scenes {MAX_SCENES} \\
+            --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
             --tag {t} --enhancement baseline --variant head --dump-audit --results-root {RESULTS}
 !du -sh {WORK}'''),
         md("""### 2 · Self-Audit analysis (CPU)
@@ -470,7 +489,7 @@ pose-source variants are written with the **same depth** and scored by the harne
         t = tag_for(m)
         !python scripts/self_audit_eval.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
             --baseline-tag {t} --weights official:{m} --datasets {DS} --max-scenes {MAX_SCENES} \\
-            --results-root {RESULTS} --out-dir {OUT}/{t}'''),
+            --results-root {RESULTS} --out-dir {OUT}/{t} {RECON_VARIANTS}'''),
         md("### 3 · Results: original DA3 vs DA3 + Self-Audit"),
         code('''from IPython.display import Image, Markdown, display
 for m in MODELS:
@@ -522,11 +541,7 @@ What it measures: `docs/da3_enhancement_report.md` §4.2; how to save and compar
         code(COLAB_GPU),
         code(COLAB_SETUP),
         code(COLAB_OFFICIAL),
-        code('''import json
-chk = json.load(open("/content/open3d_check.json"))
-assert chk["legacy_tsdf_ok"], ("Open3D TSDF fusion is broken here, so reconstruction metrics would be wrong. "
-                               "Stop and send open3d_check.json (or run 05_self_audit on Kaggle).")
-print("Open3D TSDF OK:", chk["open3d"])'''),
+        code(RECON_CHECK.replace("__PATH__", "/content/open3d_check.json")),
         md("### Configuration"),
         code('''MODELS = ["da3-small"]                      # full runs: ONE model per session ("da3-small", then "da3-base")
 DATASETS = ["hiroom", "7scenes", "dtu64"]
@@ -581,7 +596,7 @@ re-pass (DA3 conditioned on its own cameras). The exported depth / poses are unc
     for m in MODELS:
         t = tag_for(m)
         !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
-            --weights official:{m} --datasets {DS} --modes pose recon_unposed --max-scenes {MAX_SCENES} \\
+            --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
             --tag {t} --enhancement baseline --variant head --dump-audit --results-root {RESULTS} \\
             --fusion-workers {FUSION_WORKERS}
         to_drive(RESULTS, "self_audit/results")
@@ -596,7 +611,7 @@ pose-source variants are written with the **same depth** and scored by the harne
         t = tag_for(m)
         !python scripts/self_audit_eval.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
             --baseline-tag {t} --weights official:{m} --datasets {DS} --max-scenes {MAX_SCENES} \\
-            --results-root {RESULTS} --out-dir {OUT}/{t} --fusion-workers {FUSION_WORKERS}
+            --results-root {RESULTS} --out-dir {OUT}/{t} --fusion-workers {FUSION_WORKERS} {RECON_VARIANTS}
         to_drive(OUT, "self_audit")   # summary, figures, CSV and records of this model'''),
         md("### 3 · Results: original DA3 vs DA3 + Self-Audit"),
         code('''from IPython.display import Image, Markdown, display

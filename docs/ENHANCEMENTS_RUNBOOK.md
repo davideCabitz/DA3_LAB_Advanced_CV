@@ -69,6 +69,18 @@ experiments/results/<enhancement>/<tag>.json
       `RESUME_FROM = "/kaggle/input/<that version>"` (attach it as input first).
    3. The analysis downloads DA3-BENCH again, because the harness needs the GT meshes.
 
+**Open3D and the reconstruction scores (both platforms).**
+- Kaggle and Colab now run Python 3.13, which only gets Open3D 0.20.0. Its TSDF fusion returns empty
+  meshes, a known bug ([isl-org/Open3D#7592](https://github.com/isl-org/Open3D/issues/7592)); the
+  working 0.19.0 only exists up to Python 3.12.
+- The notebooks check this. When TSDF is broken, they run **without the reconstruction scores**
+  (F1 / Chamfer) instead of stopping:
+  - the baseline and the pose variants use `--modes pose`;
+  - the records then contain AUC only.
+- Failure detection (A), depth uncertainty (C) and pose accuracy (B, AUC) don't use Open3D and are
+  complete.
+- The printed message says which case applies.
+
 ## 2b. Run 05 on Google Colab instead (`05_self_audit_colab`)
 
 Use it when the Kaggle GPU queue is too long. Same scripts, same results, same record format, so
