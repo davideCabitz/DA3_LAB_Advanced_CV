@@ -192,16 +192,51 @@ def draw_drives(candidates, n: int, seed: int = 0) -> list[str]:
     return sorted(out)
 
 
-def make_split(available, eigen_test: set[str], n_test: int, n_val: int, seed: int = 0) -> dict:
+def make_split(available, eigen_test: set[str], n_test: int, n_val: int, seed: int = 0,
+               n_train: int | None = None) -> dict:
     """Pre-registered split (configs/lora_analysis.yaml `kitti`):
     test  = n_test drives drawn from the available Eigen test drives;
     val   = n_val drives drawn from the available non-Eigen drives;
-    train = every other available non-Eigen drive. Eigen test drives not drawn are left unused."""
+    train = n_train drives drawn from the remaining non-Eigen drives (all of them if n_train is None).
+    Drives not drawn are left unused (and need not be converted)."""
     avail = {drive_id(d) for d in available}
     test = draw_drives(avail & eigen_test, n_test, seed)
     val = draw_drives(avail - eigen_test, n_val, seed)
-    train = sorted(avail - eigen_test - set(val))
+    rest = avail - eigen_test - set(val)
+    train = sorted(rest) if n_train is None else draw_drives(rest, n_train, seed)
     split = check_split(train, val, test, eigen_test)
     split["unused_eigen"] = sorted((avail & eigen_test) - set(test))
+    split["unused_other"] = sorted(rest - set(train))
     split["seed"] = int(seed)
     return split
+
+
+# ----------------------------------------------------------------------------- clips (shared by training and evaluation)
+CLIP_HW = (280, 504)        # 1.8:1, multiples of 14 (configs/lora_analysis.yaml train.resolution)
+
+
+def clip_starts(n_frames: int, views: int, stride: int, n_clips: int) -> list[int]:
+    """Up to n_clips evenly spaced, non-overlapping windows of `views` frames taken every `stride` frames."""
+    span = (views - 1) * stride + 1
+    if n_frames < span:
+        return []
+    k = min(n_clips, n_frames // span)
+    return [int(round(x)) for x in np.linspace(0, n_frames - span, k)]
+
+
+def load_clip(scene, idx: list[int], hw=CLIP_HW, aspect: float = 1.8):
+    """Frames `idx` of a CanonicalScene: centre-cropped to `aspect`, RGB resized to hw.
+    Returns rgb (S,H,W,3) uint8, LiDAR depth of the crop at full resolution (S,ch,cw), K of the resized
+    crop (S,3,3), w2c (S,4,4) relative to the first frame (OpenCV)."""
+    from da3.io_utils import resize_rgb
+
+    rgbs, gts, Ks, w2cs = [], [], [], []
+    for i in idx:
+        rgb, depth = scene.load(i)
+        y0, x0, ch, cw = box = center_crop_box(*rgb.shape[:2], aspect)
+        rgbs.append(resize_rgb(rgb[y0:y0 + ch, x0:x0 + cw], hw))
+        gts.append(depth[y0:y0 + ch, x0:x0 + cw])
+        Ks.append(crop_intrinsics(scene.K[i], box, hw))
+        w2cs.append(np.linalg.inv(scene.c2w[i]))
+    w2c = np.stack(w2cs)
+    return np.stack(rgbs), np.stack(gts), np.stack(Ks), w2c @ np.linalg.inv(w2c[0])

@@ -170,31 +170,38 @@ def code(text):
 
 
 # ----------------------------------------------------------------------------- 07_lora (Kaggle + Colab)
-# One set of step cells for both platforms. Every step is resumable: it is skipped when its result
+# One set of step cells for both platforms. Every part is resumable: it is skipped when its result
 # exists (a complete JSON, or a marker written only after the commands exited with code 0).
-# Platform cells define: OUT, CANON, RAW_TMP, the inputs, save_checkpoint() (Colab: rsync to Drive;
-# Kaggle: no-op, the version output is the checkpoint) and the restore (Colab: from Drive;
-# Kaggle: RESUME_FROM = an attached earlier version).
+# Platform cells define the paths, the inputs, save_checkpoint() / free_* (Colab: rsync to Drive;
+# Kaggle: no-ops, the version output is the checkpoint) and the restore (Colab: Drive and/or
+# RESUME_FROM; Kaggle: RESUME_FROM = an attached earlier version).
 
-_LORA_INTRO_PARTS = """| Part | What | Needs | Time (T4) |
+_LORA_INTRO_PARTS = """| Part | What | Needs | Time (T4, DA3-Small) |
 |---|---|---|---|
-| A · platform check | unit tests; with the **released** weights on the GPU: LoRA off = bit-identical, B = 0 = bit-identical; measured memory / time of one LoRA training step (replaces the estimates in docs/LORA.md) | nothing | ~10 min |
-| B · KITTI conversion | raw drives -> canonical format, LiDAR depth (evaluation only), pre-registered drive split with the Eigen-test leakage guard | your KITTI drives | ~5 min / drive |
-| C · go/no-go | released DA3 unposed vs conditioned on the OXTS poses, same clips: **GO if the posed depth is ≥ 5% better** (AbsRel vs LiDAR) | B | ~10 min |
-| D · fountain reference | released-model reconstruction of your fountain photos: the "step 0" every later LoRA reconstruction is compared with | your photos | ~5 min |
+| A · platform check | unit tests; with the **released** weights on the GPU: LoRA off = bit-identical, B = 0 = bit-identical; measured memory / time of one training step | nothing | ~10 min |
+| B · KITTI conversion | raw drives -> canonical format, LiDAR depth (evaluation only), pre-registered drive split (Eigen-test leakage guard); only the drives of the split are converted | KITTI raw | ~1-5 min / drive |
+| C · go/no-go | released DA3 unposed vs conditioned on the OXTS poses on the validation drives: **GO if the posed depth is ≥ 5% better** | B | ~10 min |
+| D · fountain reference | released-model reconstruction of the fountain photos ("step 0") | photos | ~5 min |
+| E · training | LoRA arms `e3`, `pose_only`, `own_output` × seeds, one complete seed after the other (2000 steps each, adapters + snapshots every 500 steps) | B, C = GO | ~1 h / run (part A prints the measured s/step) |
+| F · KITTI test | released + every adapter on the held-out test drives, identical clips | E | ~15 min |
+| G · Sec. 6 no-regression | released + E3 adapters on HiRoom, 7Scenes, DTU-64 (pose + reconstruction), the paper's protocol | E | 2-4 h / run: split `SEC6_RUNS` over sessions or platforms |
+| H · fountain comparison | every final adapter and the snapshots of `SNAPSHOT_RUN` on the same photos: differences, side-by-side video, aligned PLYs | D, E | ~5 min / model |
+| I · analysis | the pre-registered tests (docs/LORA_ANALYSIS_PLAN.md, plan v2) -> `analysis/summary.md` + result records | F (+ G) | 1 min |
 
-**Your inputs.** KITTI raw from cvlibs.net (after registration): for each drive the
-*synced+rectified* zip (`<date>_drive_XXXX_sync.zip`: image_02, oxts, velodyne_points) **and** the
-calibration zip of its date (`<date>_calib.zip`). Zips are unpacked by the notebook if needed; the
-converter finds the folders itself. For part C use **2 drives that are NOT in the Eigen test list**
-(they become validation drives; test drives are never looked at before a LoRA exists). Plus the
-fountain photos (a folder of images of one scene)."""
+**Inputs.** KITTI raw: per drive the *synced+rectified* data (image_02, oxts, velodyne_points) and the
+calibration of its date, either the zips from cvlibs.net or an unpacked copy (e.g. a public Kaggle
+mirror of KITTI raw: attach it on Kaggle, nothing to download). Plus the fountain photos.
 
-_LORA_COMMON_DEFS = r'''# --- shared helpers (resumable steps) -----------------------------------------------------------
-import glob, json, os, urllib.request, zipfile
+**Sessions (suggested, 4-day plan).** 1: A-F (Kaggle, the KITTI mirror is attached there).
+2: G with `SEC6_RUNS = ["released"]` on one platform and `["e3_s0", "e3_s1"]` on the other, both resuming
+from session 1's output; then H and I. Records of different sessions combine (same protocol)."""
+
+_LORA_COMMON_DEFS = r'''# --- shared helpers (resumable parts) -----------------------------------------------------------
+import glob, json, os, time, urllib.request, zipfile
 import torch
 _exit_code = None   # set by every "!" command (IPython); 0 = success
 os.makedirs(f"{OUT}/.done", exist_ok=True)
+os.makedirs(RESULTS, exist_ok=True)
 def is_done(path):
     """A finished step leaves a complete JSON file (a truncated copy does not count)."""
     try:
@@ -205,9 +212,14 @@ def done(step):
     return os.path.exists(f"{OUT}/.done/{step}")
 def mark_done(step):
     open(f"{OUT}/.done/{step}", "w").close()
+def run_dir(name):            # "e3_s0" -> runs/<preset>_e3_s0
+    return f"{OUT}/runs/{PRESET}_{name}"
+def adapter_path(name):
+    return f"{run_dir(name)}/adapter.pt"
+def trained():
+    return [f"{a}_s{s}" for s in SEEDS for a in ARMS if is_done(f"{run_dir(f'{a}_s{s}')}/train_summary.json")]
 def prepare_raw(src):
-    """KITTI input folder -> a folder with the unpacked drives. Zips found under `src` are extracted once
-    to RAW_TMP (each zip gets a marker, so a resumed run does not unpack it again)."""
+    """KITTI input -> folder with unpacked drives. Zips under `src` are extracted once to RAW_TMP."""
     zips = sorted(glob.glob(f"{src}/**/*.zip", recursive=True))
     if not zips:
         return src
@@ -219,18 +231,26 @@ def prepare_raw(src):
             zipfile.ZipFile(z).extractall(RAW_TMP)
             open(mark, "w").close()
     return RAW_TMP
+def log_deviation(text):
+    with open(f"{OUT}/deviations.txt", "a") as f:
+        f.write(time.strftime("%Y-%m-%d %H:%M ") + text + "\n")
+    print("[deviation logged]", text)
 GPU_MSG = "This part runs the model and needs a GPU (see the first cell)."
-for step, label in (("check", "A platform check"), ("kitti", "B KITTI conversion"),
-                    (f"gonogo_{PRESET}", "C go/no-go"), (f"fountain_{PRESET}", "D fountain reference")):
-    state = done(step) or is_done(f"{OUT}/{step}.json")
-    print(f"{label:22s}: {'DONE (will be skipped)' if state else 'to do'}")'''
+KITTI_TEST = f"{OUT}/kitti_test_{PRESET}.json"
+GONOGO = f"{OUT}/gonogo_{PRESET}.json"
+SEC6_TAG = lambda name: f"lora_sec6_{PRESET}_{name}_{'-'.join(SEC6_DATASETS)}"
+SEC6_REC = lambda name: f"{RESULTS}/{'baseline' if name == 'released' else 'lora'}/{SEC6_TAG(name)}.json"
+print("A check:", "DONE" if done("check") else "to do", "| B KITTI:", "DONE" if done("kitti") else "to do",
+      "| C go/no-go:", "DONE" if is_done(GONOGO) else "to do", "| D fountain:", "DONE" if done(f"fountain_{PRESET}") else "to do")
+print("E trained:", trained() or "none", "| F KITTI test:", "DONE" if is_done(KITTI_TEST) else "to do",
+      "| G Sec. 6 done:", [n for n in ["released"] + [f"e3_s{s}" for s in SEEDS] if is_done(SEC6_REC(n))] or "none")'''
 
 _LORA_A = r'''if RUN["check"]:
     if done("check"):
         print("[checkpoint] part A already complete, skipped")
     else:
         assert torch.cuda.is_available(), GPU_MSG
-        !python -m pytest -q tests/test_lora.py tests/test_kitti.py 2>&1 | tail -n 3
+        !python -m pytest -q tests/test_lora.py tests/test_kitti.py tests/test_lora_train.py tests/test_lora_stats.py 2>&1 | tail -n 3
         !python scripts/lora_check.py --presets {PRESET} --out {OUT}/lora_check.json
         if _exit_code == 0 and is_done(f"{OUT}/lora_check.json"):
             mark_done("check")
@@ -243,68 +263,207 @@ _LORA_A = r'''if RUN["check"]:
         for k, r in chk["probe"].items():
             print(f"{k:28s}", f"peak {r['peak_gb']:.2f} GB, {r['s_per_step']:.2f} s/step" if r["ok"] else "OUT OF MEMORY")'''
 
-_LORA_B = r'''KITTI_OK = False
+_LORA_B = r'''KITTI_OK = is_done(f"{CANON}/split.json") and done("kitti")
 if RUN["kitti"] and KITTI_RAW:
-    if done("kitti") and os.path.exists(f"{CANON}/split.json"):
+    if KITTI_OK:
         print("[checkpoint] part B already complete, skipped")
     else:
         RAW = prepare_raw(KITTI_RAW)
         urllib.request.urlretrieve(EIGEN_URL, f"{OUT}/kitti_eigen_test_files.txt")
-        !python scripts/prepare_kitti.py --raw {RAW} --out {CANON} --eigen-test-list {OUT}/kitti_eigen_test_files.txt --skip-existing
+        !python scripts/prepare_kitti.py --raw "{RAW}" --out {CANON} --eigen-test-list {OUT}/kitti_eigen_test_files.txt --skip-existing
         if _exit_code == 0 and is_done(f"{CANON}/split.json"):
             os.makedirs(f"{OUT}/kitti", exist_ok=True)
             !cp {CANON}/split.json {OUT}/kitti/split.json
             mark_done("kitti")
         save_checkpoint()
     KITTI_OK = is_done(f"{CANON}/split.json")
-    if KITTI_OK:
-        split = json.load(open(f"{CANON}/split.json"))
-        print("validation drives (used by part C):", split["val"])
-        print("test drives (NOT used here):", split["test"], "| training drives:", split["train"])'''
+if KITTI_OK:
+    split = json.load(open(f"{CANON}/split.json"))
+    print("train:", split["train"], "\nval (go/no-go):", split["val"], "\ntest (held out):", split["test"])
+elif RUN["kitti"]:
+    print("no converted KITTI drives: set KITTI_RAW (parts B, C, E, F need them)")'''
 
 _LORA_C_MD = """### C · Go/no-go: does the pose-conditioned DA3 (E3's teacher) give better depth than the unposed one?
-Same clips for both: 8 frames (every 3rd), 10 clips per drive, 1.8:1 centre crop at 504x280, depth
-vs LiDAR with one median scale per clip, cameras from the camera head. With only 2 drives the
-numbers are descriptive (no CI); the rule is the report's: **GO if posed / unposed AbsRel ≤ 0.95**.
-If only the trajectory errors (ATE / RPE) improve, E3 would reduce to ordinary pose-supervised
-fine-tuning (report §4.4)."""
+Validation drives only. 8 frames (every 3rd), 10 clips per drive, 1.8:1 centre crop at 504x280,
+depth vs LiDAR with one median scale per clip, cameras from the camera head. **GO if posed / unposed
+AbsRel ≤ 0.95** (report §4.4). If only ATE / RPE improve, E3 reduces to pose-supervised fine-tuning."""
 
-_LORA_C = r'''G = f"{OUT}/gonogo_{PRESET}.json"
-if RUN["gonogo"] and KITTI_RAW:
-    if is_done(G):
+_LORA_C = r'''if RUN["gonogo"] and KITTI_OK:
+    if is_done(GONOGO):
         print("[checkpoint] part C already complete, skipped")
-    elif not KITTI_OK:
-        print("part B has no converted drives yet: run it first")
     else:
         assert torch.cuda.is_available(), GPU_MSG
-        !python scripts/kitti_eval.py --root {CANON} --drives val --arms released posed --preset {PRESET} --out {G}
+        !python scripts/kitti_eval.py --root {CANON} --drives val --arms released posed --preset {PRESET} --out {GONOGO}
         save_checkpoint()
-        free_kitti_checkpoint()
-    if is_done(G):
-        from IPython.display import Markdown, display
-        display(Markdown(open(G.replace(".json", ".md")).read()))'''
+if is_done(GONOGO):
+    from IPython.display import Markdown, display
+    display(Markdown(open(GONOGO.replace(".json", ".md")).read()))'''
 
 _LORA_D_MD = """### D · Fountain: reference reconstruction with the released weights
-The same photos, frame order, resolution (504) and settings will later be reconstructed with every
-LoRA (arms, seeds, training snapshots) and rendered side by side. The fountain has no ground truth,
-so it shows how the reconstruction *changes*, never whether it is better."""
+Every adapter and training snapshot is later run on the same photos, order and resolution (part H).
+No ground truth: it shows how the reconstruction *changes*, never whether it is better."""
 
-_LORA_D = r'''FOUT = f"{OUT}/fountain/released_{PRESET}"
+_LORA_D = r'''FREF = f"{OUT}/fountain/released_{PRESET}"
 if RUN["fountain"] and FOUNTAIN:
     if done(f"fountain_{PRESET}"):
         print("[checkpoint] part D already complete, skipped")
     else:
         assert torch.cuda.is_available(), GPU_MSG
-        !python scripts/infer.py --images "{FOUNTAIN}" --out {FOUT} --weights official:{PRESET} --mesh {MESH}
+        !python scripts/infer.py --images "{FOUNTAIN}" --out {FREF} --weights official:{PRESET} --mesh {MESH}
         if _exit_code == 0:
-            !python scripts/render_preview.py {FOUT}
+            !python scripts/render_preview.py {FREF}
             mark_done(f"fountain_{PRESET}")
         save_checkpoint()
-    if done(f"fountain_{PRESET}"):
-        from IPython.display import Image, display
-        for f in ("preview.png", "preview_3d.png"):
-            if os.path.exists(f"{FOUT}/{f}"):
-                display(Image(f"{FOUT}/{f}", width=1000))'''
+if done(f"fountain_{PRESET}"):
+    from IPython.display import Image, display
+    for f in ("preview.png", "preview_3d.png"):
+        if os.path.exists(f"{FREF}/{f}"):
+            display(Image(f"{FREF}/{f}", width=1000))'''
+
+_LORA_E_MD = """### E · Training (LoRA on blocks 4-11, recipe frozen in `configs/lora_analysis.yaml`)
+Arms × seeds, one complete seed after the other, so a cut session still leaves whole seeds. The cache
+(teacher + frozen outputs of the training clips) is built once and shared. Each run saves an
+adapter-only file, snapshots every 500 steps and a resumable checkpoint; finished runs are skipped.
+Pre-registered: E3 is trained only after a **GO** (or with `IGNORE_GONOGO = True`, which is logged as a
+deviation in `deviations.txt`)."""
+
+_LORA_E = r'''TRAIN_OK = False
+if RUN["train"] and KITTI_OK:
+    gate = json.load(open(GONOGO))["summary"]["gate"]["decision"] if is_done(GONOGO) else None
+    if gate == "GO":
+        TRAIN_OK = True
+    elif IGNORE_GONOGO:
+        TRAIN_OK = True
+        if not done("deviation_gonogo"):
+            log_deviation(f"training run although the go/no-go was {gate or 'not run'} (IGNORE_GONOGO=True)")
+            mark_done("deviation_gonogo")
+    else:
+        print(f"go/no-go = {gate or 'not run'}: training skipped, as pre-registered "
+              "(IGNORE_GONOGO = True trains anyway and logs a deviation)")
+if TRAIN_OK:
+    for seed in SEEDS:
+        for arm in ARMS:
+            name = f"{arm}_s{seed}"
+            if is_done(f"{run_dir(name)}/train_summary.json"):
+                print(f"[checkpoint] {name}: trained, skipped"); continue
+            budget = session_hours_left()
+            if budget < 0.25:
+                print(f"session time almost used up ({budget:.2f} h left): stopping before {name}; "
+                      "save the version and resume (RESUME_FROM)"); break
+            assert torch.cuda.is_available(), GPU_MSG
+            !python scripts/train_lora.py --root {CANON} --arm {arm} --seed {seed} --preset {PRESET} \
+                --cache {CACHE} --out {OUT}/runs --resume --time-budget-h {budget:.2f}
+            save_checkpoint()
+        else:
+            continue
+        break
+print("trained:", trained())'''
+
+_LORA_F_MD = """### F · Held-out KITTI test drives: released vs every trained adapter (identical clips)
+The test drives are evaluated once per adapter set; the result feeds the pre-registered H1 / S1-S5."""
+
+_LORA_F = r'''if RUN["kitti_test"] and KITTI_OK:
+    names = trained()
+    have = set(json.load(open(KITTI_TEST))["adapters"]) if is_done(KITTI_TEST) else None
+    if not split["test"]:
+        print("no Eigen test drive converted: add Eigen test drives to the KITTI input")
+    elif not names:
+        print("no trained adapter yet (part E)")
+    elif have is not None and have >= set(names):
+        print("[checkpoint] part F already complete for", sorted(have), "- skipped")
+    else:
+        assert torch.cuda.is_available(), GPU_MSG
+        ads = " ".join(f"{n}={adapter_path(n)}" for n in names)
+        !python scripts/kitti_eval.py --root {CANON} --drives test --arms released --adapters {ads} --preset {PRESET} --out {KITTI_TEST}
+        save_checkpoint()
+        free_kitti_checkpoint()
+if is_done(KITTI_TEST):
+    from IPython.display import Markdown, display
+    display(Markdown(open(KITTI_TEST.replace(".json", ".md")).read()))'''
+
+_LORA_G_MD = """### G · Sec. 6 no-regression: released vs E3 adapters, the paper's protocol (released harness)
+HiRoom, 7Scenes, DTU-64; pose AUC + TSDF reconstruction (Python 3.12 side environment when this
+Open3D's TSDF is broken). `SEC6_RUNS` chooses the runs of this session (e.g. `["released"]` here and
+`["e3_s0", "e3_s1"]` on the other platform); finished runs are skipped, records combine."""
+
+_LORA_G = r'''if RUN["sec6"]:
+    from huggingface_hub import hf_hub_download
+    import psutil
+    FUSION_WORKERS = max(1, min(os.cpu_count() or 1, int(psutil.virtual_memory().total / 2**30 // 6), 8))
+    os.makedirs(BENCH, exist_ok=True)
+    for d in SEC6_DATASETS:
+        if not os.path.exists(f"{BENCH}/{d}"):
+            z = hf_hub_download("depth-anything/DA3-BENCH", f"{d}.zip", repo_type="dataset", local_dir=f"{BENCH}_zips")
+            zipfile.ZipFile(z).extractall(BENCH); os.remove(z)
+    DS6 = " ".join(SEC6_DATASETS)
+    for name in SEC6_RUNS:
+        t, rec = SEC6_TAG(name), SEC6_REC(name)
+        if is_done(rec):
+            print(f"[checkpoint] {name}: Sec. 6 record exists, skipped"); continue
+        if name != "released" and not os.path.exists(adapter_path(name)):
+            print(f"{name}: no adapter (train it in part E or resume from that output)"); continue
+        enh, var = ("baseline", "head") if name == "released" else ("lora", name)
+        ad = "" if name == "released" else f"--adapter {adapter_path(name)} --baseline-tag {SEC6_TAG('released')}"
+        common = (f"--official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} --weights official:{PRESET} "
+                  f"--datasets {DS6} --modes {MODES} --tag {t} {ad}")
+        if SPLIT:   # model here (GPU), scores in the Python 3.12 environment (CPU)
+            if not os.path.exists(f"{WORK}/.done_infer_{t}"):
+                assert torch.cuda.is_available(), GPU_MSG
+                !python scripts/eval_bench.py {common} --infer-only --skip-existing
+                if _exit_code == 0:
+                    open(f"{WORK}/.done_infer_{t}", "w").close()
+                save_checkpoint()
+            !{PY312} scripts/eval_bench.py {common} --eval-only --enhancement {enh} --variant {var} \
+                --results-root {RESULTS} --fusion-workers {FUSION_WORKERS}
+        else:
+            assert torch.cuda.is_available(), GPU_MSG
+            !python scripts/eval_bench.py {common} --enhancement {enh} --variant {var} --results-root {RESULTS} \
+                --fusion-workers {FUSION_WORKERS} --skip-existing
+        save_checkpoint()
+        if is_done(rec):
+            free_work(t)
+            print(f"{name}: done ->", rec)'''
+
+_LORA_H_MD = """### H · Fountain: every adapter and the training snapshots on the same photos
+Differences to the released reconstruction (depth, cameras, Chamfer / F1 between the clouds), a
+side-by-side orbit video with one camera path and aligned PLYs for Blender (`compare_*/aligned/`).
+Snapshot `step_00000` has B = 0, so it must equal the released model (a visible sanity check)."""
+
+_LORA_H = r'''if RUN["fountain_arms"] and FOUNTAIN and done(f"fountain_{PRESET}"):
+    models = {n: adapter_path(n) for n in trained()}
+    snaps = {f"{SNAPSHOT_RUN}_{os.path.basename(p)[:-3]}": p
+             for p in sorted(glob.glob(f"{run_dir(SNAPSHOT_RUN)}/snapshots/step_*.pt"))}
+    for name, path in {**models, **snaps}.items():
+        fo = f"{OUT}/fountain/{name}"
+        if done(f"fountain_{PRESET}_{name}"):
+            continue
+        assert torch.cuda.is_available(), GPU_MSG
+        !python scripts/infer.py --images "{FOUNTAIN}" --out {fo} --weights official:{PRESET} --adapter {path} --mesh {MESH} > /dev/null
+        if _exit_code == 0:
+            mark_done(f"fountain_{PRESET}_{name}")
+        save_checkpoint()
+    from IPython.display import Markdown, display
+    for label, group in (("final", models), ("snapshots", snaps)):
+        tests = " ".join(f"{n}={OUT}/fountain/{n}" for n in group if done(f"fountain_{PRESET}_{n}"))
+        if tests:
+            !python scripts/compare_reconstructions.py --ref {FREF} --test {tests} --out {OUT}/fountain/compare_{label} > /dev/null
+            display(Markdown(f"**{label}**\n\n" + open(f"{OUT}/fountain/compare_{label}/compare.md").read()))
+            print("video:", f"{OUT}/fountain/compare_{label}/side_by_side.mp4")
+    save_checkpoint()
+elif RUN["fountain_arms"]:
+    print("part H needs FOUNTAIN and the reference of part D")'''
+
+_LORA_I = r'''if RUN["analysis"] and is_done(KITTI_TEST):
+    rel = SEC6_REC("released")
+    e3 = " ".join(SEC6_REC(f"e3_s{s}") for s in SEEDS if is_done(SEC6_REC(f"e3_s{s}")))
+    sec6 = (f"--sec6-released {rel} --sec6-e3 {e3}") if is_done(rel) and e3 else ""
+    !python scripts/lora_analysis.py --kitti {KITTI_TEST} {sec6} --out {OUT}/analysis --results-root {RESULTS}
+    save_checkpoint()
+    from IPython.display import Markdown, display
+    if os.path.exists(f"{OUT}/analysis/summary.md"):
+        display(Markdown(open(f"{OUT}/analysis/summary.md").read()))
+elif RUN["analysis"]:
+    print("part I needs the KITTI test evaluation (part F)")'''
 
 _LORA_MESH = r'''# Open3D (TSDF meshing of the fountain) + self-test; without a working TSDF the fountain uses depth-grid meshing
 import sys, json
@@ -319,33 +478,52 @@ except Exception:
     MESH = "depth"
 print("fountain mesh:", MESH)'''
 
-_LORA_COLAB_CONFIG = r'''PRESET = "da3-small"     # primary model of the pre-registered plan; "da3-base" = replication
-KITTI_RAW = "/content/drive/MyDrive/DA3/kitti_raw"   # folder with the KITTI zips (or unpacked drives); "" = skip B, C
-FOUNTAIN = "/content/drive/MyDrive/DA3/fountain"     # folder with the fountain photos; "" = skip D
-RUN = {"check": True, "kitti": True, "gonogo": True, "fountain": True}
-EIGEN_URL = "https://raw.githubusercontent.com/nianticlabs/monodepth2/master/splits/eigen/test_files.txt"
+_LORA_RUNS_CONFIG = r'''
+ARMS = ["e3", "pose_only", "own_output"]   # plan v2 arms (same data, steps, seeds)
+SEEDS = [0, 1]                              # plan v2: 2 seeds
+SEC6_DATASETS = ["hiroom", "7scenes", "dtu64"]
+SEC6_RUNS = ["released", "e3_s0", "e3_s1"]  # runs of THIS session for part G (split them over sessions if needed)
+SNAPSHOT_RUN = "e3_s0"                      # its snapshots (every 500 steps) are reconstructed in part H
+IGNORE_GONOGO = False                       # True = train even without a GO (logged as a deviation)
+RUN = {"check": True, "kitti": True, "gonogo": True, "fountain": True, "train": True,
+       "kitti_test": True, "sec6": False, "fountain_arms": True, "analysis": True}
+EIGEN_URL = "https://raw.githubusercontent.com/nianticlabs/monodepth2/master/splits/eigen/test_files.txt"'''
+
+_LORA_COLAB_CONFIG = r'''PRESET = "da3-small"     # primary model of the pre-registered plan
+KITTI_RAW = "/content/drive/MyDrive/DA3/kitti_raw"   # KITTI zips or unpacked drives; "" = skip B, C, E, F
+FOUNTAIN = "/content/drive/MyDrive/DA3/fountain"     # the fountain photos; "" = skip D, H
+RESUME_FROM = ""         # optional: an earlier lora output copied to Drive (e.g. a Kaggle session's "lora" folder)
+''' + _LORA_RUNS_CONFIG + r'''
 DRIVE_DIR = "/content/drive/MyDrive/DA3/lora_colab"  # results + checkpoints; "" = no Drive (a disconnect loses everything)
 CHECKPOINT = True        # save the progress to Drive; after a disconnect just "Run all" again and it continues
 SAVE_EVERY_MIN = 5       # background save interval (also saved after every part)
-FREE_CHECKPOINT_WHEN_DONE = True   # delete the converted KITTI drives from Drive after the go/no-go (results stay)
+FREE_CHECKPOINT_WHEN_DONE = True   # remove converted drives / harness exports from Drive once their results exist
+SESSION_H = 0            # 0 = no session limit (Colab); training runs are resumable anyway
 OUT = "/content/lora"
-CANON = "/content/canonical/kitti"        # converted drives
-RAW_TMP = "/content/kitti_raw"            # unpacked KITTI zips
+RESULTS = f"{OUT}/results"                 # standard result records (copy into experiments/results/)
+CANON = "/content/canonical/kitti"         # converted drives
+RAW_TMP = "/content/kitti_raw"             # unpacked KITTI zips
+CACHE = "/content/lora_cache"              # teacher / frozen outputs of the training clips (rebuilt if lost)
+BENCH = "/content/da3bench"
+WORK = "/content/eval_lora"                # harness exports of part G
 import os, shutil, subprocess, threading, time
+T_START = time.time()
+def session_hours_left():
+    return 1e3 if not SESSION_H else SESSION_H - (time.time() - T_START) / 3600 - 0.5
 os.makedirs(OUT, exist_ok=True)
-if DRIVE_DIR or KITTI_RAW.startswith("/content/drive") or FOUNTAIN.startswith("/content/drive"):
+if DRIVE_DIR or "/content/drive" in KITTI_RAW + FOUNTAIN + RESUME_FROM:
     from google.colab import drive
     drive.mount("/content/drive")
 if DRIVE_DIR:
     os.makedirs(DRIVE_DIR, exist_ok=True)
-for name, path in (("KITTI_RAW", KITTI_RAW), ("FOUNTAIN", FOUNTAIN)):
+for name, path in (("KITTI_RAW", KITTI_RAW), ("FOUNTAIN", FOUNTAIN), ("RESUME_FROM", RESUME_FROM)):
     if path and not os.path.exists(path):
-        print(f"{name} = {path} does not exist: that part is skipped")
+        print(f"{name} = {path} does not exist: ignored")
 KITTI_RAW = KITTI_RAW if KITTI_RAW and os.path.exists(KITTI_RAW) else ""
 FOUNTAIN = FOUNTAIN if FOUNTAIN and os.path.exists(FOUNTAIN) else ""
 if shutil.which("rsync") is None:
     !apt-get -qq install -y rsync > /dev/null
-CKPT_OUT, CKPT_CANON = f"{DRIVE_DIR}/lora", f"{DRIVE_DIR}/kitti_canonical"
+CKPT_OUT, CKPT_CANON, CKPT_WORK = f"{DRIVE_DIR}/lora", f"{DRIVE_DIR}/kitti_canonical", f"{DRIVE_DIR}/eval_lora"
 CKPT_ON = bool(DRIVE_DIR and CHECKPOINT)
 _ckpt_lock = threading.Lock()
 
@@ -356,23 +534,32 @@ def _rsync(src, dst, *opts):
         print(f"[checkpoint] rsync {src} -> {dst}: exit {r.returncode}: {r.stderr[-300:]}")
 
 def save_checkpoint():
-    """Copy what changed to Drive: the results (OUT) and the converted KITTI drives (CANON)."""
+    """Copy what changed to Drive: results / runs / fountain (without the big ray maps), the converted
+    KITTI drives until the test evaluation is done, and the harness exports of part G."""
     if not CKPT_ON:
         return
     with _ckpt_lock:
         if os.path.exists(OUT):
-            _rsync(OUT, CKPT_OUT, "--checksum")
+            _rsync(OUT, CKPT_OUT, "--checksum", "--exclude=ray/*.npy", "--exclude=*.tmp")
         if os.path.exists(CANON) and not os.path.exists(f"{OUT}/.done/kitti_freed"):
             _rsync(CANON, CKPT_CANON, "--size-only")
+        if os.path.exists(WORK):
+            _rsync(WORK, CKPT_WORK, "--size-only", "--exclude=benchmark_dataset", "--exclude=*__*", "--exclude=*.partial.npz")
 
 def free_kitti_checkpoint():
-    """After the go/no-go the converted drives are not needed on Drive any more (re-conversion is cheap)."""
-    if CKPT_ON and FREE_CHECKPOINT_WHEN_DONE and os.path.exists(f"{OUT}/gonogo_{PRESET}.json"):
+    """After the KITTI test evaluation the converted drives are not needed on Drive any more."""
+    if CKPT_ON and FREE_CHECKPOINT_WHEN_DONE and os.path.exists(KITTI_TEST):
         with _ckpt_lock:
             shutil.rmtree(CKPT_CANON, ignore_errors=True)
-            os.makedirs(f"{OUT}/.done", exist_ok=True)
             open(f"{OUT}/.done/kitti_freed", "w").close()
-        print("[checkpoint] go/no-go done: converted KITTI drives removed from Drive (results kept)")
+        print("[checkpoint] KITTI test done: converted drives removed from Drive (results kept)")
+
+def free_work(tag):
+    """A finished Sec. 6 run: its harness exports are not needed any more (the record is saved)."""
+    if FREE_CHECKPOINT_WHEN_DONE:
+        with _ckpt_lock:
+            for root in ((CKPT_WORK, WORK) if CKPT_ON else (WORK,)):
+                shutil.rmtree(f"{root}/workspace/evaluation/{tag}", ignore_errors=True)
 
 def _autosave():
     while True:
@@ -382,25 +569,33 @@ def _autosave():
         except Exception as e:
             print("[checkpoint] save failed:", e)
 
-if CKPT_ON:   # restore: never overwrites files of this session, only brings back what is missing
-    for src, dst in ((CKPT_OUT, OUT), (CKPT_CANON, CANON)):
-        if os.path.exists(src):
-            _rsync(src, dst, "--ignore-existing")
-    if not globals().get("_AUTOSAVE_STARTED"):
-        threading.Thread(target=_autosave, daemon=True).start()
-        _AUTOSAVE_STARTED = True
+# restore: never overwrites files of this session, only brings back what is missing
+for src, dst in (((CKPT_OUT, OUT), (CKPT_CANON, CANON), (CKPT_WORK, WORK)) if CKPT_ON else ()) + \
+                (((RESUME_FROM, OUT),) if RESUME_FROM else ()):
+    if os.path.exists(src):
+        _rsync(src, dst, "--ignore-existing")
+if CKPT_ON and not globals().get("_AUTOSAVE_STARTED"):
+    threading.Thread(target=_autosave, daemon=True).start()
+    _AUTOSAVE_STARTED = True
 print("checkpoints:", f"on, every {SAVE_EVERY_MIN} min -> {DRIVE_DIR}" if CKPT_ON else "OFF (nothing survives a disconnect)")'''
 
-_LORA_KAGGLE_CONFIG = r'''PRESET = "da3-small"     # primary model of the pre-registered plan; "da3-base" = replication
-KITTI_RAW = ""           # Copy path from the Input panel, e.g. "/kaggle/input/kitti-raw"; "" = skip parts B, C
-FOUNTAIN = ""            # folder with the fountain photos, e.g. "/kaggle/input/my-photos/multiview/fountain"; "" = skip D
-RUN = {"check": True, "kitti": True, "gonogo": True, "fountain": True}
-RESUME_FROM = ""         # output of an earlier version of this notebook, e.g. "/kaggle/input/<name>/lora"
-EIGEN_URL = "https://raw.githubusercontent.com/nianticlabs/monodepth2/master/splits/eigen/test_files.txt"
+_LORA_KAGGLE_CONFIG = r'''PRESET = "da3-small"     # primary model of the pre-registered plan
+KITTI_RAW = ""           # Copy path from the Input panel (KITTI zips or a KITTI raw mirror); "" = skip B, C, E, F
+FOUNTAIN = ""            # folder with the fountain photos (Copy path); "" = skip D, H
+RESUME_FROM = ""         # output of an earlier session of this notebook, e.g. "/kaggle/input/<name>/lora"
+''' + _LORA_RUNS_CONFIG + r'''
+SESSION_H = 11.5         # Kaggle stops a session at 12 h: training stops cleanly (resumable) before that
 OUT = "/kaggle/working/lora"
-CANON = "/tmp/canonical/kitti"            # converted drives (large, not saved)
-RAW_TMP = "/tmp/kitti_raw"                # unpacked KITTI zips, if the dataset holds zips
-import os
+RESULTS = f"{OUT}/results"                 # standard result records (copy into experiments/results/)
+CANON = "/tmp/canonical/kitti"             # converted drives (not saved: redone after a resume)
+RAW_TMP = "/tmp/kitti_raw"                 # unpacked KITTI zips, if the input holds zips
+CACHE = "/tmp/lora_cache"                  # teacher / frozen outputs of the training clips (rebuilt if lost)
+BENCH = "/tmp/da3bench"
+WORK = "/tmp/eval_lora"                    # harness exports of part G
+import os, shutil, time
+T_START = time.time()
+def session_hours_left():
+    return SESSION_H - (time.time() - T_START) / 3600 - 1.0   # 1 h kept for parts F-I and saving
 os.makedirs(OUT, exist_ok=True)
 if RESUME_FROM:
     !cp -rn {RESUME_FROM}/. {OUT}/ && ls {OUT}
@@ -408,84 +603,95 @@ def save_checkpoint():      # Kaggle: the saved version output is the checkpoint
     pass
 def free_kitti_checkpoint():
     pass
-if not KITTI_RAW:
-    print("KITTI_RAW is empty: parts B and C are skipped")
-if not FOUNTAIN:
-    print("FOUNTAIN is empty: part D is skipped")'''
+def free_work(tag):
+    shutil.rmtree(f"{WORK}/workspace/evaluation/{tag}", ignore_errors=True)
+for name, path in (("KITTI_RAW", KITTI_RAW), ("FOUNTAIN", FOUNTAIN)):
+    if not path:
+        print(f"{name} is empty: its parts are skipped")'''
+
+
+def _only_if_sec6(text: str) -> str:
+    """Wrap a setup cell so it runs only when part G is switched on (it needs the harness + scoring)."""
+    return 'if RUN["sec6"]:\n' + "\n".join(("    " + l) if l.strip() else l for l in text.splitlines())
 
 
 def lora_notebook(colab: bool) -> list:
     root = "/content" if colab else "/kaggle/working"
     if colab:
-        intro = md(f"""# 07 (Colab) · Enhancement 3: LoRA platform + E3 go/no-go (part 0)
-Same as `07_lora` (same scripts, same results), for **Google Colab**. Part 0 of the LoRA work
-(`docs/LORA.md`; statistics pre-registered in `docs/LORA_ANALYSIS_PLAN.md`; how to run:
-`docs/ENHANCEMENTS_RUNBOOK.md` §3b). **No training happens in this notebook yet.**
+        intro = md(f"""# 07 (Colab) · Enhancement 3: LoRA (E3), from the go/no-go to the pre-registered analysis
+Same as `07_lora` (same scripts, same results), for **Google Colab**. Plan: `docs/LORA.md`; statistics
+pre-registered in `docs/LORA_ANALYSIS_PLAN.md` (plan v2); how to run: `docs/ENHANCEMENTS_RUNBOOK.md` §3b.
 
 {_LORA_INTRO_PARTS}
 
 **Before running**
-1. Put the KITTI zips (as downloaded) and the fountain photos on Google Drive, e.g.
-   `MyDrive/DA3/kitti_raw/` and `MyDrive/DA3/fountain/`; set `KITTI_RAW` / `FOUNTAIN` below.
-2. **Runtime → Change runtime type**: the first GPU that connects, cheapest first,
-   **T4 → L4 → A100 → G4**. Parts A, C, D need a GPU; part B alone runs on CPU.
-3. Private repo only: left bar → **key icon (Secrets)** → `GITHUB_TOKEN`, **Notebook access** on.
-4. **Runtime → Run all**, and allow Google Drive access.
+1. KITTI and the fountain photos on Google Drive (`KITTI_RAW`, `FOUNTAIN`). A KITTI mirror that lives on
+   Kaggle is easier to use from `07_lora` on Kaggle; this notebook can then continue from that output
+   (copy its `lora` folder to Drive and set `RESUME_FROM`), e.g. for part G.
+2. **Runtime → Change runtime type**: T4 → L4 → A100 → G4 (more CPU cores also speed up part G's scoring).
+3. Private repo only: **key icon (Secrets)** → `GITHUB_TOKEN`, **Notebook access** on.
+4. Choose the parts in `RUN` (part G is off by default), then **Runtime → Run all** and allow Drive.
 
-**Checkpoints (on by default).** Colab deletes `/content` when the connection is lost, so the
-progress (results + the converted KITTI drives) is saved to Drive (`DRIVE_DIR`) every few minutes
-and after every part.
-- **After a disconnect:** reconnect, change nothing, **Runtime → Run all**. Finished parts and
-  converted drives are skipped; it continues from the last save.
-- The converted drives (a few hundred MB per drive) are removed from Drive once the go/no-go is
-  done (`FREE_CHECKPOINT_WHEN_DONE`); results stay.
-- To avoid disconnects: keep this tab open and the computer awake.
-
-**Compute units:** when the run ends, **Runtime → Disconnect and delete runtime**.
-**Send me** `lora_check.json` and `gonogo_<model>.md` (in `DRIVE_DIR`).""")
+**Checkpoints (on by default).** Colab deletes `/content` when the connection is lost: results, runs
+(adapters, snapshots, resumable training checkpoints), fountain outputs, converted drives and part G's
+harness exports are saved to Drive (`DRIVE_DIR`) every few minutes and after every part.
+- **After a disconnect:** reconnect, change nothing, **Runtime → Run all**: finished parts, runs and
+  scenes are skipped; an interrupted training run continues from its last checkpoint (every 100 steps).
+- Converted drives and harness exports are removed from Drive once their results exist
+  (`FREE_CHECKPOINT_WHEN_DONE`).
+- Keep this tab open and the computer awake. **Compute units:** when done, **Runtime → Disconnect and delete runtime**.""")
         platform = [code(COLAB_GPU), code(COLAB_SETUP), code(_LORA_MESH.replace("__ROOT__", root))]
         config = _LORA_COLAB_CONFIG
-        save_md = md("### Save: `lora_part0.zip` goes to Drive (or is downloaded). Send me `lora_check.json` + `gonogo_<model>.md`; then **Runtime → Disconnect and delete runtime**")
+        sec6_setup = [code(_only_if_sec6(COLAB_OFFICIAL)),
+                      code(_only_if_sec6(RECON_CHECK.replace("__PATH__", "/content/open3d_check.json"))),
+                      code(_only_if_sec6(SCORING_ENV.replace("__FULL_MODES__", "pose recon_unposed")))]
+        save_md = md("### Save: `lora_results.zip` goes to Drive. Copy `lora/results/*` into the repo's `experiments/results/` and commit")
         save = code(r'''save_checkpoint()
-!cd /content && rm -f lora_part0.zip && zip -qr lora_part0.zip lora -x "lora/.done/*" && ls -la lora_part0.zip
+!cd /content && rm -f lora_results.zip && zip -qr lora_results.zip lora -x "lora/.done/*" "lora/fountain/*/ray/*" "lora/runs/*/ckpt/*" && ls -la lora_results.zip
 if DRIVE_DIR:
-    shutil.copy("/content/lora_part0.zip", DRIVE_DIR)
-    print("saved to Drive:", f"{DRIVE_DIR}/lora_part0.zip", "| results also in", CKPT_OUT)
+    shutil.copy("/content/lora_results.zip", DRIVE_DIR)
+    print("saved to Drive:", f"{DRIVE_DIR}/lora_results.zip", "| everything also in", CKPT_OUT)
 else:
     from google.colab import files
-    files.download("/content/lora_part0.zip")''')
+    files.download("/content/lora_results.zip")''')
     else:
-        intro = md(f"""# 07 · Enhancement 3: LoRA platform + E3 go/no-go (part 0)
-Part 0 of the LoRA work (`docs/LORA.md`, statistics pre-registered in `docs/LORA_ANALYSIS_PLAN.md`,
-how to run: `docs/ENHANCEMENTS_RUNBOOK.md` §3b). **No training happens in this notebook yet.** It
-checks that everything the training will rely on works, and answers the go/no-go question of E3
-before any LoRA is trained. A Colab version with Drive checkpoints is `07_lora_colab`.
+        intro = md(f"""# 07 · Enhancement 3: LoRA (E3), from the go/no-go to the pre-registered analysis
+Plan: `docs/LORA.md`; statistics pre-registered in `docs/LORA_ANALYSIS_PLAN.md` (plan v2); how to run:
+`docs/ENHANCEMENTS_RUNBOOK.md` §3b. A Colab version with Drive checkpoints is `07_lora_colab`.
 
 {_LORA_INTRO_PARTS}
 
-Settings: **Accelerator = GPU (T4 / P100)**, **Internet = on** (clone, weights, Eigen list). Attach
-the KITTI zips and the photos as private datasets (right panel > Add Input > Your Datasets).
+Settings: **Accelerator = GPU (T4 / P100)**, **Internet = on**. Attach KITTI (zips or a KITTI raw
+mirror) and the photos (right panel > Add Input), paste the paths with *Copy path*, choose the parts in
+`RUN` (part G is off by default), then **Save Version → Save & Run All**.
 
-**Resuming.** Every part is skipped when its result exists. If a session stops early, attach its
-output (Add Input > Your Work > the version) and set `RESUME_FROM`; finished parts are not run
-again (the KITTI conversion is redone if it is needed: `/tmp` is not saved).
-
-Outputs in `/kaggle/working/lora/` (zipped as `lora_part0.zip`). **Send me** `lora_check.json` and
-`gonogo_<model>.md`.""")
+**Resuming.** Every part, training run and Sec. 6 scene is skipped when its result exists; training
+stops cleanly before the 12-h limit (`SESSION_H`). Next session: attach the previous version's output
+(Add Input > Your Work) and set `RESUME_FROM`; `/tmp` (converted drives, cache) is rebuilt automatically.""")
         platform = [code(SETUP), code('''import torch
 assert torch.cuda.is_available(), "No GPU: right panel > Settings > Accelerator > GPU T4 (or P100), then run all again."
 if True:
 ''' + _GPU_SMOKE), code(_LORA_MESH.replace("__ROOT__", root))]
         config = _LORA_KAGGLE_CONFIG
-        save_md = md("### Save: download `lora_part0.zip` (Output panel) and send me `lora_check.json` + `gonogo_<model>.md`")
-        save = code('''!cd /kaggle/working && rm -f lora_part0.zip && zip -qr lora_part0.zip lora && ls -la lora_part0.zip
-!find {OUT} -maxdepth 2 \\( -name "*.json" -o -name "*.md" \\) | sort''')
+        sec6_setup = [code(_only_if_sec6(OFFICIAL)),
+                      code(_only_if_sec6(RECON_CHECK.replace("__PATH__", "/kaggle/working/open3d_check.json"))),
+                      code(_only_if_sec6(SCORING_ENV.replace("__FULL_MODES__", "pose recon_unposed")))]
+        save_md = md("### Save: download `lora_results.zip` (Output panel); copy `lora/results/*` into the repo's `experiments/results/` and commit")
+        save = code('''!cd /kaggle/working && rm -f lora_results.zip && zip -qr lora_results.zip lora -x "lora/fountain/*/ray/*" && ls -la lora_results.zip
+!find {OUT} -maxdepth 3 \\( -name "*.json" -o -name "*.md" -o -name "*.mp4" \\) -not -path "*/fountain/*/*/*" | sort | head -50''')
     return [intro, *platform,
             md("### Configuration"), code(config), code(_LORA_COMMON_DEFS),
+            md("Part G setup (harness, Open3D check, Python 3.12 scoring environment): runs only if `RUN[\"sec6\"]`"),
+            *sec6_setup,
             md("### A · Platform check (unit tests + released weights on the GPU)"), code(_LORA_A),
             md("### B · KITTI raw -> canonical format + drive split"), code(_LORA_B),
             md(_LORA_C_MD), code(_LORA_C),
             md(_LORA_D_MD), code(_LORA_D),
+            md(_LORA_E_MD), code(_LORA_E),
+            md(_LORA_F_MD), code(_LORA_F),
+            md(_LORA_G_MD), code(_LORA_G),
+            md(_LORA_H_MD), code(_LORA_H),
+            md("### I · Pre-registered analysis (plan v2)"), code(_LORA_I),
             save_md, save]
 
 

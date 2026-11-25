@@ -89,6 +89,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--weights", default="official:da3-small")
     ap.add_argument("--poses", default=None)
+    ap.add_argument("--adapter", default=None, help="LoRA adapter (scripts/train_lora.py) on the released --weights")
     ap.add_argument("--per-image", action="store_true",
                     help="run every image on its own (N_v = 1): depth + ray map per image, one sub-folder each")
     ap.add_argument("--max-views", type=int, default=0)
@@ -109,6 +110,12 @@ def main():
     if args.max_views:
         paths = paths[:: max(1, len(paths) // args.max_views)][: args.max_views]
     model, setting = load_model(args.weights, args.device)
+    if args.adapter:
+        from da3.lora import attach_adapter
+
+        info = attach_adapter(model, args.weights, args.adapter)
+        setting = "official+LoRA"
+        print("adapter:", {k: info[k] for k in ("path", "arm", "seed", "step")})
     out = Path(args.out)
     if args.per_image:
         if args.poses:

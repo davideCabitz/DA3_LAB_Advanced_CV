@@ -43,13 +43,13 @@ Top 3 from the multi-agent study (docs/da3_enhancement_report.md §4–5). Run t
 - [~] enhancement: motion-robust DA3 (docs/DYNAMIC_SCENES.md §4): C2 masked ray-map poses, C3 key-masking study,
       stretch C4 motion-aware LoRA. C1 (pose-conditioned 2nd pass) is now only a cited component: the mechanism is
       published (ScaRF-SLAM, DAVIO, VIDAR). Prior-work check 2026-11-19 (Dyna3 already does masks + 4D on DA3)
-- [~] LoRA platform (#3, docs/LORA.md; statistics pre-registered in docs/LORA_ANALYSIS_PLAN.md): `src/da3/lora.py`
-      (switchable, bit-identical off, merge, adapter files) + tests; KITTI converter, clip metrics, `kitti_eval.py`;
-      notebook `07_lora` part 0
-  - [!] KITTI raw: register, upload 2 non-Eigen-test drives + calib zips (+ Eigen test drives later) as a private dataset
-  - [!] `07_lora` part 0 on Kaggle: send `lora_check.json` + `gonogo_da3-small.md`
-  - [ ] if GO: training script (teacher cache, anchor, adapter checkpoints, fountain snapshots), `--lora` in
-        infer.py / eval_bench.py, records with `adapter` field, 07 parts 1+
+- [~] #3 LoRA (E3), plan v2 (4-day scope, logged in docs/LORA_ANALYSIS_PLAN.md before any result):
+      `src/da3/lora.py`, `lora_train.py`, `lora_stats.py`, `data/kitti.py`; scripts `prepare_kitti.py`,
+      `lora_check.py`, `kitti_eval.py`, `train_lora.py`, `lora_analysis.py`, `compare_reconstructions.py`;
+      `--adapter` in `eval_bench.py` / `infer.py`; notebooks `07_lora` + `07_lora_colab` (parts A-I); tests
+  - [!] session 1 (Kaggle, KITTI raw mirror attached): parts A-F, H, I
+  - [!] session 2: part G (Sec. 6, split over Kaggle / Colab), then I again
+  - [ ] copy `lora/results/*` into `experiments/results/`; reports/enhancement_3_lora.md; Blender video
 - [ ] "enhancement experiment" template (config + eval command)
 - [ ] VGGT / Pi3 / DA2 comparisons (not started)
 

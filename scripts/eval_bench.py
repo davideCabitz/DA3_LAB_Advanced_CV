@@ -128,6 +128,8 @@ def main():
     ap.add_argument("--process-res", type=int, default=504, help="uniform processing resolution (longest side)")
     ap.add_argument("--meter", action="store_true", help="write per-scene efficiency meta (enhancement #2)")
     ap.add_argument("--foveated", default="", help="enhancement #2 spec, e.g. 'fraction=0.25,context_res=252'")
+    ap.add_argument("--adapter", default=None,
+                    help="LoRA adapter (scripts/train_lora.py) on the released --weights; setting 'official+LoRA'")
     ap.add_argument("--notes", default="")
     args = ap.parse_args()
     if args.foveated and (args.dump_audit or args.engine != "ours"):
@@ -155,10 +157,19 @@ def main():
     if args.eval_only:
         setting = args.setting or ("official" if args.weights.startswith("official:") else "reduced-scale")
         winfo = {"weights": args.weights}
+        if args.adapter:
+            from da3.lora import adapter_info
+
+            setting, winfo["adapter"] = args.setting or "official+LoRA", adapter_info(args.adapter)
     elif args.engine == "ours":
         from da3.eval.bench_adapter import OursAsOfficialAPI
 
         model, setting, winfo = build_ours(args.weights, args.device)
+        if args.adapter:
+            from da3.lora import attach_adapter
+
+            winfo["adapter"] = attach_adapter(model, args.weights, args.adapter)
+            setting = args.setting or "official+LoRA"
         if args.dump_audit:
             from da3.enhancements.self_audit import AuditDumper
 
@@ -239,7 +250,7 @@ def main():
         protocol=protocol(args.datasets, scenes or "all", args.max_frames, args.modes, "first"),
         sec6=summary["means"], sec6_per_scene=metrics, baseline_tag=args.baseline_tag,
         extra={"efficiency": {"all": efficiency}} if efficiency else None,
-        commit=summary["commit"], env=summary["env"], notes="; ".join(run_notes),
+        commit=summary["commit"], env=summary["env"], notes="; ".join(run_notes), adapter=winfo.get("adapter"),
     )
     rec_path = save_record(record, args.results_root)
     if dumper is not None and dumper.failures:

@@ -17,6 +17,9 @@ original DA3 next to all enhancements. Fields:
 * `sec6_per_scene`: same, per scene (optional);
 * `extra`: enhancement-specific metric groups, {group: {dataset_or_"all": {metric: value}}};
 * `baseline_tag`: tag of the original-DA3 run this record is compared with (optional);
+* `adapter`: for LoRA runs (setting "official+LoRA"), the adapter file, its SHA-256, config, seed, arm,
+  step and training drives; `weights` stays "official:<preset>" so the record is paired with the
+  released run (optional);
 * bookkeeping: commit, env, time, notes, files (figures etc.).
 """
 
@@ -38,14 +41,17 @@ def protocol(datasets, scenes="all", max_frames=100, modes=(), ref_view_strategy
 def make_record(*, enhancement: str, variant: str, tag: str, setting: str, weights: str, protocol: dict,
                 sec6: dict | None = None, sec6_per_scene: dict | None = None, extra: dict | None = None,
                 baseline_tag: str | None = None, commit: str = "unknown", env: dict | None = None,
-                notes: str = "", files: list[str] | None = None) -> dict:
-    return {
+                notes: str = "", files: list[str] | None = None, adapter: dict | None = None) -> dict:
+    rec = {
         "schema": SCHEMA, "enhancement": enhancement, "variant": variant, "tag": tag,
         "setting": setting, "weights": weights, "protocol": protocol,
         "sec6": sec6 or {}, "sec6_per_scene": sec6_per_scene or {}, "extra": extra or {},
         "baseline_tag": baseline_tag, "commit": commit, "env": env or {},
         "time": time.strftime("%Y-%m-%d %H:%M:%S"), "notes": notes, "files": files or [],
     }
+    if adapter:
+        rec["adapter"] = adapter
+    return rec
 
 
 def validate(record: dict) -> dict:

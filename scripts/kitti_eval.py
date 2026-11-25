@@ -3,7 +3,7 @@
 Arms (all on identical clips, crops, resolution and reference view "first"):
   released         released DA3, unposed (the reference arm)
   posed            released DA3 conditioned on the OXTS poses through E_c (E3's teacher)
-  lora             released DA3 + an adapter (--adapter), unposed
+  <name>           released DA3 + the adapter given as --adapters <name>=<path>, unposed
 
 For every clip of `views` frames (every `stride`-th frame, `clips_per_drive` evenly spaced,
 non-overlapping windows), images are centre-cropped to 1.8:1 and resized to 504x280; the predicted
@@ -32,9 +32,9 @@ import torch
 
 from da3.camera import affine_inverse
 from da3.data.canonical import CanonicalScene
-from da3.data.kitti import center_crop_box, crop_intrinsics
+from da3.data.kitti import clip_starts, load_clip
 from da3.eval.clip_metrics import clip_depth_metrics, trajectory_metrics
-from da3.io_utils import resize_rgb, to_model_input
+from da3.io_utils import to_model_input
 from da3.model import DA3
 
 REPO = Path(__file__).resolve().parents[1]
@@ -52,26 +52,6 @@ def select_drives(root: Path, spec: list[str]) -> list[str]:
     return spec
 
 
-def clip_starts(n_frames: int, views: int, stride: int, n_clips: int) -> list[int]:
-    span = (views - 1) * stride + 1
-    if n_frames < span:
-        return []
-    k = min(n_clips, n_frames // span)            # non-overlapping windows
-    return [int(round(x)) for x in np.linspace(0, n_frames - span, k)]
-
-
-def load_clip(scene: CanonicalScene, idx: list[int], hw=(280, 504), aspect=1.8):
-    rgbs, gts, Ks, w2cs = [], [], [], []
-    for i in idx:
-        rgb, depth = scene.load(i)
-        y0, x0, ch, cw = box = center_crop_box(*rgb.shape[:2], aspect)
-        rgbs.append(resize_rgb(rgb[y0:y0 + ch, x0:x0 + cw], hw))
-        gts.append(depth[y0:y0 + ch, x0:x0 + cw])
-        Ks.append(crop_intrinsics(scene.K[i], box, hw))
-        w2cs.append(np.linalg.inv(scene.c2w[i]))
-    return np.stack(rgbs), np.stack(gts), np.stack(Ks), np.stack(w2cs)
-
-
 @torch.no_grad()
 def run_arm(model, x, w2c=None, K=None, amp=True):
     dev = next(model.parameters()).device
@@ -85,46 +65,46 @@ def run_arm(model, x, w2c=None, K=None, amp=True):
 
 
 def evaluate(args) -> dict:
+    """Every arm sees the same clips. Adapters are loaded one after the other onto one model (same LoRA
+    config); the released / posed arms run with the LoRA switched off (bit-identical to the release)."""
     from da3.checkpoint_io import download_official, official_model
-    from da3.lora import file_sha256, load_adapter, set_lora_enabled
+    from da3.lora import adapter_info, file_sha256, has_lora, load_adapter, set_lora_enabled
 
     device = torch.device(args.device)
     model, _ = official_model(args.preset)
     model = model.to(device).eval()
     base_sha = file_sha256(download_official(args.preset))
-    adapter_info = None
-    if args.adapter:
-        adapter_info = load_adapter(model, args.adapter, base_sha256=base_sha, base_preset=args.preset)
-        set_lora_enabled(model, False)
     root = Path(args.root)
     drives = select_drives(root, args.drives)
-    rows, t0 = [], time.time()
+    clips = []
     for drive in drives:
-        scene = CanonicalScene(root / drive)
-        for c, start in enumerate(clip_starts(len(scene), args.views, args.stride, args.clips_per_drive)):
+        n = len(json.loads((root / drive / "cameras.json").read_text())["frames"])
+        clips += [(drive, c, s) for c, s in enumerate(clip_starts(n, args.views, args.stride, args.clips_per_drive))]
+    rows, infos, t0 = [], {}, time.time()
+    scenes = {}
+    for arm in args.arms:
+        adapter = args.adapters.get(arm)
+        if adapter:
+            load_adapter(model, adapter, base_sha256=base_sha, base_preset=args.preset)
+            set_lora_enabled(model, True)
+            infos[arm] = adapter_info(adapter)
+        elif has_lora(model):
+            set_lora_enabled(model, False)
+        posed = arm == "posed"
+        for drive, c, start in clips:
+            scene = scenes.setdefault(drive, CanonicalScene(root / drive))
             idx = list(range(start, start + args.views * args.stride, args.stride))
-            rgb, gt, K, w2c_gt = load_clip(scene, idx)
-            x = to_model_input(rgb)
-            # poses relative to view 0 (the gauge of every arm; E_c normalises the scale itself)
-            w2c_rel = (w2c_gt @ np.linalg.inv(w2c_gt[0])).astype(np.float32)
-            for arm in args.arms:
-                if arm == "lora":
-                    set_lora_enabled(model, True)
-                depth, pw2c = run_arm(model, x, w2c_rel if arm == "posed" else None,
-                                      K.astype(np.float32) if arm == "posed" else None, amp=not args.fp32)
-                if arm == "lora":
-                    set_lora_enabled(model, False)
-                up = np.stack([cv2.resize(d, (gt.shape[2], gt.shape[1]), interpolation=cv2.INTER_LINEAR)
-                               for d in depth])
-                row = {"drive": drive, "clip": c, "start": start, "arm": arm,
-                       **clip_depth_metrics(up, gt, max_depth=args.max_depth),
-                       **trajectory_metrics(pw2c, w2c_rel)}
-                rows.append(row)
-            print(f"{drive} clip {c}: " + " | ".join(
-                f"{r['arm']} AbsRel {r['absrel_clip']:.4f} ATE {r['ate']:.3f}" for r in rows[-len(args.arms):]),
-                flush=True)
-    return {"rows": rows, "drives": drives, "time_s": time.time() - t0, "adapter": adapter_info,
-            "base_sha256": base_sha}
+            rgb, gt, K, w2c_rel = load_clip(scene, idx)   # poses relative to view 0 (E_c normalises the scale)
+            w2c_rel = w2c_rel.astype(np.float32)
+            depth, pw2c = run_arm(model, to_model_input(rgb), w2c_rel if posed else None,
+                                  K.astype(np.float32) if posed else None, amp=not args.fp32)
+            up = np.stack([cv2.resize(d, (gt.shape[2], gt.shape[1]), interpolation=cv2.INTER_LINEAR) for d in depth])
+            rows.append({"drive": drive, "clip": c, "start": start, "arm": arm,
+                         **clip_depth_metrics(up, gt, max_depth=args.max_depth), **trajectory_metrics(pw2c, w2c_rel)})
+        arm_rows = [r for r in rows if r["arm"] == arm]
+        print(f"{arm}: {len(arm_rows)} clips | AbsRel(clip) {np.nanmean([r['absrel_clip'] for r in arm_rows]):.4f} "
+              f"| ATE {np.mean([r['ate'] for r in arm_rows]):.3f} m | {time.time() - t0:.0f} s", flush=True)
+    return {"rows": rows, "drives": drives, "time_s": time.time() - t0, "adapters": infos, "base_sha256": base_sha}
 
 
 def summarise(rows: list[dict], arms: list[str]) -> dict:
@@ -182,8 +162,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", required=True, help="canonical KITTI root (scripts/prepare_kitti.py)")
     ap.add_argument("--drives", nargs="+", default=["val"])
-    ap.add_argument("--arms", nargs="+", default=["released", "posed"], choices=["released", "posed", "lora"])
-    ap.add_argument("--adapter", default=None)
+    ap.add_argument("--arms", nargs="+", default=["released", "posed"],
+                    help="released | posed | names given in --adapters")
+    ap.add_argument("--adapters", nargs="*", default=[], metavar="NAME=PATH",
+                    help="LoRA adapters to evaluate, e.g. e3_s0=/path/adapter.pt (each NAME is also an arm)")
     ap.add_argument("--preset", default="da3-small", choices=["da3-small", "da3-base"])
     ap.add_argument("--views", type=int, default=8)
     ap.add_argument("--stride", type=int, default=3)
@@ -193,8 +175,11 @@ def main():
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--out", required=True)
     args = ap.parse_args()
-    if "lora" in args.arms and not args.adapter:
-        ap.error("--arms lora needs --adapter")
+    args.adapters = dict(a.split("=", 1) for a in args.adapters)
+    unknown = [a for a in args.arms if a not in ("released", "posed") and a not in args.adapters]
+    if unknown:
+        ap.error(f"arms {unknown} have no --adapters NAME=PATH")
+    args.arms = list(dict.fromkeys(args.arms + [a for a in args.adapters if a not in args.arms]))
 
     from da3.train_utils import environment_info, git_commit
 

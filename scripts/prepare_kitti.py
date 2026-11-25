@@ -104,14 +104,21 @@ def main():
     drives = find_drives(raw) if not args.split_only else sorted(p for p in out.iterdir() if (p / "cameras.json").exists())
     if not drives:
         raise SystemExit(f"no *_drive_*_sync folders with image_02/data under {raw}")
+    # the split is drawn from the drive NAMES first, so only the drives it uses are converted
+    names = [d.name for d in drives]
+    split = make_split(names, eigen, k["n_test_drives"], k["n_val_drives"], k["split_seed"], k.get("n_train_drives"))
+    needed = set(split["train"]) | set(split["val"]) | set(split["test"])
     stats = {}
     if not args.split_only:
         calibs = find_calibrations(raw)
-        missing = sorted({drive_id(d.name)[:10] for d in drives} - set(calibs))
+        todo = [d for d in drives if drive_id(d.name) in needed]
+        missing = sorted({drive_id(d.name)[:10] for d in todo} - set(calibs))
         if missing:
             raise SystemExit(f"calibration files (calib_cam_to_cam.txt, ...) missing for dates {missing}: "
-                             f"also upload <date>_calib.zip from the KITTI raw page")
-        for d in drives:
+                             f"also provide <date>_calib.zip from the KITTI raw page")
+        print(f"{len(drives)} drives found, {len(todo)} used by the split "
+              f"(train {len(split['train'])}, val {len(split['val'])}, test {len(split['test'])})", flush=True)
+        for d in todo:
             if args.skip_existing and (out / drive_id(d.name) / "cameras.json").exists():
                 meta = json.loads((out / drive_id(d.name) / "cameras.json").read_text())
                 stats[drive_id(d.name)] = {"frames": len(meta["frames"]), "skipped": "already converted"}
@@ -120,7 +127,6 @@ def main():
             stats[drive_id(d.name)] = convert_drive(d, out / drive_id(d.name), calibs[drive_id(d.name)[:10]], args.stride)
             print(drive_id(d.name), stats[drive_id(d.name)], "(Eigen test drive)" if drive_id(d.name) in eigen else "",
                   flush=True)
-    split = make_split([d.name for d in drives], eigen, k["n_test_drives"], k["n_val_drives"], k["split_seed"])
     split["eigen_list_sha256"] = hashlib.sha256(Path(args.eigen_test_list).read_bytes()).hexdigest()
     split["n_eigen_drives_in_list"] = len(eigen)
     split["stats"] = stats

@@ -97,13 +97,13 @@ see [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md) §4–5.
   - `export/`: PLY, transforms.json (NeRF/COLMAP style), GLB.
   - `compare/`: standard result record (`experiments/results/<enhancement>/<tag>.json`, schema `da3-result/1`), comparison tables (differences to the original DA3, only within one protocol: same weights, datasets, scenes, frame sampling) and plots.
   - `enhancements/`: one sub-package per enhancement of the frozen DA3; `self_audit/` = enhancement #1 (signals, audit model, pose-source choice/fusion, triple-collocation calibration, dump hook for the benchmark adapter); `foveated/` = enhancement #2 (mixed per-view resolution routing, bit-identical to DA3 at equal resolution, attention-mass balancing, focus selection / token budgets, harness adapter, virtual zoom cameras).
-  - `lora.py`: switchable LoRA (inserted by name into backbone blocks 4-11, off = bit-identical, merge/unmerge, adapter-only files tied to the base weights' SHA-256).
+  - `lora.py`: switchable LoRA (inserted by name into backbone blocks 4-11, off = bit-identical, merge/unmerge, adapter-only files tied to the base weights' SHA-256); `lora_train.py` (arm targets, gauge / scale alignment, anchor); `lora_stats.py` (pre-registered tests: sign-flip, cluster bootstrap, Holm, non-inferiority).
   - `data/kitti.py` (KITTI raw calib / OXTS poses / LiDAR depth, Eigen-test leakage guard, drive split) and `eval/clip_metrics.py` (clip-scale AbsRel, ATE / RPE).
   - `model.py`: full DA3 network; `config.py`: model/train configs.
 - `configs/`: YAML configs (model size, resolution, views, pose conditioning, training).
 - `scripts/`: entry points (train, eval, infer, parity, checkpoint conversion, Blender import, Blender turntable video).
 - `tests/`: pytest unit tests (`pytest -q`).
-- `notebooks/`: thin Kaggle notebooks (00_setup, 01_parity, 02_train, 03_eval, 04_demo_export (+ 04_demo_export_colab: the same demo on Google Colab), 05_self_audit (+ 05_self_audit_colab), 06_foveated, 07_lora (+ 07_lora_colab, Drive checkpoints; enhancement #3: LoRA platform check, KITTI go/no-go, fountain reference), 09_compare_all); all logic stays in `src/` and `scripts/`.
+- `notebooks/`: thin Kaggle notebooks (00_setup, 01_parity, 02_train, 03_eval, 04_demo_export (+ 04_demo_export_colab: the same demo on Google Colab), 05_self_audit (+ 05_self_audit_colab), 06_foveated, 07_lora (+ 07_lora_colab, Drive checkpoints; enhancement #3, parts A-I: checks, KITTI, go/no-go, training, KITTI test, Sec. 6, fountain comparison, analysis), 09_compare_all); all logic stays in `src/` and `scripts/`.
 - `experiments/`: experiment registry (config, seed, commit, metrics per run); `experiments/results/` holds the standard result records (copied from the Kaggle outputs and committed by the user).
 - `reports/`: write-ups (baseline.md, enhancement_1_self_audit.md, enhancement_2_foveated.md).
 

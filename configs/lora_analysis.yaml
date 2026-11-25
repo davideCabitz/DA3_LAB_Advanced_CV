@@ -4,19 +4,20 @@
 # timestamp). The analysis code must read this file and store its SHA-256 in every result record,
 # so a later change of the plan is visible. Reasons for every choice: docs/LORA_ANALYSIS_PLAN.md.
 # Do NOT edit after results are seen; a changed plan = a new version + an entry in the deviations log.
-version: 1
+# Version 2 (2026-11-25, still before any LoRA result): scope reduced to fit a 4-day deadline;
+# every change is listed in docs/LORA_ANALYSIS_PLAN.md, deviations log entry 1.
+version: 2
 
 # ----------------------------------------------------------------------------- arms and runs
 models:
   primary: da3-small             # all confirmatory decisions
-  replication: da3-base          # descriptive only (E3 + pose_only, 2 seeds), if the budget allows
+  replication: none              # v2: DA3-Base replication dropped (deadline)
 reference_arm: released          # released weights, LoRA absent (bit-identical to LoRA off)
 arms:                            # every arm: same data, steps, rank, seeds, evaluation
   e3: {teacher: posed_da3, losses: [depth, grad, ray, point, cam], anchor: true}
   pose_only: {teacher: none, losses: [ray, cam], anchor: true}
   own_output: {teacher: unposed_da3_frozen, losses: [depth, grad, ray, point, cam], anchor: true}
-  free_geometry: {optional: true}   # published test-time LoRA (2604.14048); descriptive only
-seeds: [0, 1, 2]                 # training seeds; >= 2 required for any decision, 3 planned
+seeds: [0, 1]                    # v2: 2 training seeds (v1: 3); >= 2 required for any decision
 min_seeds: 2
 
 # ----------------------------------------------------------------------------- frozen training recipe
@@ -43,13 +44,17 @@ train:
   max_depth_m: 80.0
   scale_align: per_clip_median   # detached s* = median(D_hat / D_target) on valid pixels
   anchor_weight: 0.1
-  anchor_data: tartanair_subset  # replay set outside KITTI and outside every test set
+  anchor_data: kitti_train_clips # v2: frozen unposed DA3 outputs on the training clips (no extra download;
+                                 # v1: TartanAir replay set). Weaker guard against forgetting, stated.
 
 # ----------------------------------------------------------------------------- KITTI split (drive level)
 kitti:
   test_pool: eigen_test_drives   # drives of the Eigen et al. (2014) test file list
-  n_test_drives: 12              # drawn from the pool with split_seed, stratified by category
+  n_test_drives: 12              # drawn from the pool with split_seed, stratified by date; fewer if fewer
+                                 # Eigen test drives are available (v2: data from a Kaggle mirror of KITTI raw)
   n_val_drives: 3                # not in the Eigen test list; hyper-parameter checks only
+  n_train_drives: 10             # v2: at most 10 training drives, drawn with split_seed (conversion time);
+                                 # v1 used every downloaded non-Eigen drive
   train_drives: not_eigen_test   # every other downloaded drive outside the Eigen test list
   split_seed: 0
   clips_per_drive: 10            # evenly spaced, non-overlapping clips of `views` frames
@@ -94,17 +99,17 @@ non_inferiority:                     # intersection-union test: "no regression" 
   arm: e3
   pooling: equal_dataset_weights     # mean over datasets of the per-dataset mean paired difference
   components:
-    - {id: N1, benchmark: sec6, metric: auc03, datasets: [hiroom, eth3d, dtu, 7scenes, scannetpp], margin_abs: 1.0}
-    - {id: N2, benchmark: sec6, metric: auc30, datasets: [hiroom, eth3d, dtu, 7scenes, scannetpp], margin_abs: 1.0}
-    - {id: N3, benchmark: sec6, metric: fscore, mode: recon_unposed, datasets: [hiroom, eth3d, 7scenes, scannetpp], margin_abs: 1.0}
-    - {id: N4, benchmark: sec6, metric: chamfer, mode: recon_unposed, datasets: [dtu], margin_rel: 0.03}
+    - {id: N1, benchmark: sec6, metric: auc03, datasets: [hiroom, 7scenes, dtu64], margin_abs: 1.0}
+    - {id: N2, benchmark: sec6, metric: auc30, datasets: [hiroom, 7scenes, dtu64], margin_abs: 1.0}
+    - {id: N3, benchmark: sec6, metric: fscore, mode: recon_unposed, datasets: [hiroom, 7scenes], margin_abs: 1.0}
+    - {id: N4, benchmark: sec6, metric: chamfer, mode: recon_unposed, datasets: [dtu64], margin_rel: 0.03}
     - {id: N5, benchmark: mono, metric: delta1, datasets: mono_datasets, margin_abs: 0.5}
     - {id: N6, benchmark: mono, metric: absrel, datasets: mono_datasets, margin_rel: 0.03}
   dataset_unavailable: component_reported_as_not_evaluated   # never imputed; claim restricted to what ran
 
 # Monocular datasets for N5/N6. Must be final before any LoRA result is seen; changing it later is a
 # deviation. eth3d = DA3-BENCH ETH3D images with src/da3/eval/gt_depth.py (no new download).
-mono_datasets: [eth3d]
+mono_datasets: []               # v2: monocular check not evaluated (no loader in time); N5/N6 reported as not evaluated
 mono_alignment: least_squares_scale_shift_depth   # DA3 Tab. 4 does not state it; DA2 uses disparity
 mono_alignment_sensitivity: least_squares_scale_shift_disparity
 
@@ -116,8 +121,6 @@ descriptive:                         # CIs and p-values, no decision
   - kitti_pose_auc
   - kitti_ray_camera_source
   - tab4_kitti_eigen                 # in-domain for the LoRA, never part of the no-regression claim
-  - replication_da3_base
-  - free_geometry
   - seed_spread
 
 aa_checks:

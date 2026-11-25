@@ -255,3 +255,27 @@ def load_adapter(model: nn.Module, path: str | Path, base_sha256: str | None = N
         for k, v in state["tensors"].items():
             own[k].copy_(v.to(own[k].device, own[k].dtype))
     return {k: state[k] for k in ("lora_config", "base_preset", "base_sha256", "seed", "meta")}
+
+
+def adapter_info(path: str | Path) -> dict:
+    """What a result record stores about an adapter (no model needed)."""
+    state = torch.load(path, map_location="cpu", weights_only=False)
+    if state.get("format") != ADAPTER_FORMAT:
+        raise ValueError(f"{path}: not a {ADAPTER_FORMAT} adapter file")
+    meta = state.get("meta", {})
+    return {"path": str(path), "sha256": file_sha256(path), "lora_config": state["lora_config"],
+            "base_preset": state.get("base_preset"), "base_sha256": state.get("base_sha256"), "seed": state.get("seed"),
+            "arm": meta.get("arm"), "step": meta.get("step"), "plan_version": meta.get("plan_version"),
+            "plan_sha256": meta.get("plan_sha256"), "train_drives": meta.get("train_drives")}
+
+
+def attach_adapter(model: nn.Module, weights: str, adapter: str | Path) -> dict:
+    """Load an adapter onto a model built from released weights ("official:<preset>"); the adapter must
+    have been trained on exactly those weights (SHA-256 check). The LoRA stays unmerged (exact path)."""
+    if not weights.startswith("official:"):
+        raise ValueError("adapters are defined on the released weights: use --weights official:<preset>")
+    preset = weights.split(":", 1)[1]
+    from da3.checkpoint_io import download_official
+
+    load_adapter(model, adapter, base_sha256=file_sha256(download_official(preset)), base_preset=preset)
+    return adapter_info(adapter)

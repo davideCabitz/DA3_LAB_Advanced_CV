@@ -198,24 +198,35 @@ Gates (printed and in `gates.json`):
 - G3 cross-scale probe: primary, then secondary, robustness and the rescue, each labelled;
 - G2 region zoom: oracle (primary), random and texture (secondary).
 
-## 3b. Run `07_lora` (part 0: platform check + E3 go/no-go)
+## 3b. Run `07_lora` / `07_lora_colab` (enhancement #3: LoRA, E3)
 
-Plan: [LORA.md](LORA.md); statistics: [LORA_ANALYSIS_PLAN.md](LORA_ANALYSIS_PLAN.md). No training yet.
-1. **Inputs (private Kaggle datasets):** KITTI raw, for each drive the *synced+rectified* zip and the
-   `<date>_calib.zip` of its date (Kaggle unpacks them). For the go/no-go use **2 drives that are not
-   in the Eigen test list**; they become validation drives. Optionally the fountain photos.
-2. **Settings:** Accelerator = GPU (T4 / P100), Internet = on. In the configuration cell set
-   `KITTI_RAW` and `FOUNTAIN` with *Copy path* from the Input panel.
-3. **Save Version → Save & Run All.** Parts: A platform check (stops with an error if LoRA off is not
-   bit-identical to the released model), B conversion + `split.json`, C go/no-go, D fountain reference.
-4. **Send** `lora/lora_check.json` (measured memory per configuration) and `lora/gonogo_<model>.md`.
-5. **Resuming.** Every part is skipped when its result exists. Kaggle: attach the stopped version's
-   output and set `RESUME_FROM`. **Colab (`07_lora_colab`):** same checkpoint system as
-   `05_self_audit_colab`: progress (results + converted KITTI drives) is saved to `DRIVE_DIR` every
-   few minutes and after every part; after a disconnect reconnect and **Run all** without changing
-   anything. Put the KITTI zips and the fountain photos on Drive (`KITTI_RAW`, `FOUNTAIN`); the
-   notebook unpacks the zips itself.
-   GO = the pose-conditioned DA3 has ≥ 5% lower AbsRel; NO-GO stops E3 (the platform stays).
+Plan: [LORA.md](LORA.md); statistics: [LORA_ANALYSIS_PLAN.md](LORA_ANALYSIS_PLAN.md) (plan v2). Parts
+A-I, chosen with `RUN`; every part, training run and Sec. 6 scene is skipped when its result exists.
+
+| Part | What |
+|---|---|
+| A | unit tests + LoRA off / B = 0 bit-identical with the released weights on the GPU + measured memory and s/step |
+| B | KITTI raw -> canonical drives + `split.json` (only the split's drives are converted; Eigen test drives never train) |
+| C | go/no-go on the validation drives (posed vs unposed DA3) |
+| D | fountain reference reconstruction (released) |
+| E | training: `e3`, `pose_only`, `own_output` × seeds 0, 1 (only after GO, or `IGNORE_GONOGO = True`, logged) |
+| F | held-out KITTI test drives: released + every adapter |
+| G | Sec. 6 no-regression (HiRoom, 7Scenes, DTU-64), released + E3 adapters; off by default, `SEC6_RUNS` splits it |
+| H | fountain: every adapter + the snapshots of `SNAPSHOT_RUN`; differences, side-by-side video, aligned PLYs |
+| I | pre-registered analysis -> `lora/analysis/summary.md` + result records |
+
+1. **KITTI:** on Kaggle attach a public KITTI raw mirror (needs `image_02`, `oxts`, `velodyne_points`
+   and the `calib_*.txt` files per date) or your own zips; on Colab put them on Drive.
+2. **Session 1 (Kaggle, GPU, Internet on):** set `KITTI_RAW`, `FOUNTAIN`; defaults run A-F, H, I.
+   Training stops cleanly before the 12-h limit (`SESSION_H`).
+3. **Session 2:** attach session 1's output and set `RESUME_FROM`; set `RUN["sec6"] = True` and split
+   `SEC6_RUNS` between Kaggle and Colab (e.g. `["released"]` / `["e3_s0", "e3_s1"]`; Colab: copy the
+   `lora` folder to Drive and set `RESUME_FROM`). Then run I again with all records present.
+4. **Colab:** same checkpoint system as `05_self_audit_colab` (Drive, autosave, Run all after a
+   disconnect); an interrupted training run continues from its last checkpoint (every 100 steps).
+5. **Save:** `lora_results.zip`; copy `lora/results/*` into `experiments/results/` (sub-folders
+   `baseline/`, `lora/`) and commit. Send `lora_check.json`, `gonogo_*.md`, `kitti_test_*.md`,
+   `analysis/summary.md`, `fountain/compare_*/compare.md`.
 
 ## 4. Save the results (needed for 09)
 

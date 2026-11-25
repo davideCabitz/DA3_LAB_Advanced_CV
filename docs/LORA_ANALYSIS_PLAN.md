@@ -1,6 +1,7 @@
 # LoRA / enhancement #3: pre-registered statistical analysis plan
 
-**Version 1, fixed on 2026-11-25, before any LoRA training run and before any LoRA result exists.**
+**Version 1, fixed on 2026-11-25, before any LoRA training run and before any LoRA result exists.
+Version 2 (same day, still before any run): reduced scope for a 4-day deadline, see the deviations log.**
 The numbers live in [configs/lora_analysis.yaml](../configs/lora_analysis.yaml). Every result
 record stores that file's SHA-256, and the analysis warns when a run was made under a different
 plan. The git history is the timestamp. After results are in, the plan is not edited: a changed plan
@@ -159,4 +160,18 @@ choice of folder name, [LORA.md](LORA.md) "Open decisions"):
 
 ## Deviations log
 
-None yet.
+**1. 2026-11-25, plan version 2, before any LoRA run or result** (no number of any arm had been seen;
+only part 0 of notebook 07, which trains nothing, had been written). Reason: a 4-day deadline.
+Hypotheses, estimands, tests, margins and decision rules are unchanged. Changed:
+- seeds 3 → **2** (the plan's minimum);
+- Sec. 6 non-inferiority on **HiRoom, 7Scenes, DTU-64** only (N1, N2 on all three; N3 F1 on HiRoom +
+  7Scenes; N4 Chamfer on DTU-64). ETH3D and ScanNet++ are **not evaluated** (disk / time); the
+  "no regression" claim is restricted to these three datasets;
+- monocular N5 / N6: **not evaluated** (no loader in time);
+- dropped: DA3-Base replication, Free Geometry;
+- anchor: frozen unposed DA3 outputs on the KITTI training clips instead of a TartanAir replay set
+  (no extra download); a weaker guard against forgetting, stated as such;
+- data: KITTI raw from a public Kaggle mirror (CC BY-NC-SA allows non-commercial redistribution) instead
+  of the official download; test drives = all available Eigen test drives up to 12, by the same rule.
+- training drives: at most 10, drawn with the split seed from the non-Eigen drives (v1: all of them);
+  only the drives of the split are converted.
