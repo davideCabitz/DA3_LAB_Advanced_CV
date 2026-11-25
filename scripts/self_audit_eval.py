@@ -71,6 +71,8 @@ def parse_args():
     ap.add_argument("--keep-replay-exports", action="store_true",
                     help="keep the copied exports of each variant (they duplicate the depth: large)")
     ap.add_argument("--fusion-workers", type=int, default=4)
+    ap.add_argument("--resume", action="store_true",
+                    help="skip the harness replays whose result record already exists (interrupted run)")
     ap.add_argument("--tc-anchors", type=int, default=20000)
     ap.add_argument("--max-depth-samples", type=int, default=200000)
     return ap.parse_args()
@@ -245,6 +247,15 @@ def run_replays(args, scenes, poses, work_root: Path) -> list[str]:
             continue
         modes = ("pose", "recon_unposed") if v in args.recon_variants else ("pose",)
         vtag = f"{args.baseline_tag}__{v}"
+        done = Path(args.results_root) / VARIANTS[v] / f"{vtag}.json"
+        if args.resume and done.exists():
+            try:
+                json.loads(done.read_text(encoding="utf-8"))
+                print(f"[self-audit] harness replay: {vtag} already scored ({done}), skipped")
+                tags.append(vtag)
+                continue
+            except (json.JSONDecodeError, UnicodeDecodeError):
+                pass  # truncated copy: score it again
         vdir = evaluation_dir(work_root, vtag)
         for k, sc in enumerate(scenes):
             w2c, K = poses[v][k]

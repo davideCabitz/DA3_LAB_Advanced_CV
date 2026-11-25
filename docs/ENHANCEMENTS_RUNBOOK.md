@@ -104,13 +104,30 @@ its records go into `experiments/results/` and appear in 09 like the Kaggle ones
    - not the TPUs (the code needs CUDA). H100 needs a higher Colab plan.
 
    Private repo: **key icon (Secrets)** → `GITHUB_TOKEN`, with **Notebook access** on.
-3. **Runtime → Run all**, and allow Google Drive access. After each model, the notebook copies the
-   summary, figures and records to `DRIVE_DIR` (default `MyDrive/DA3/self_audit_colab`). The last
-   cell saves `self_audit_results.zip` there.
-4. **Same order as on Kaggle:**
+3. **Runtime → Run all**, and allow Google Drive access. Results, figures and records go to
+   `DRIVE_DIR` (default `MyDrive/DA3/self_audit_colab`). The last cell saves
+   `self_audit_results.zip` there.
+4. **Checkpoints (`CHECKPOINT = True`, the default).** Colab deletes `/content` when the
+   connection drops. To survive that, the notebook saves the progress to Drive in the background
+   (`SAVE_EVERY_MIN`, 5 min) and after every step:
+   - the exports and dumps go to `DRIVE_DIR/eval_self_audit`, without the benchmark data;
+   - the records, figures and summaries go to `DRIVE_DIR/self_audit`.
+
+   **After a disconnect:** reconnect, change nothing, **Runtime → Run all**. The configuration cell
+   restores the files and prints what is `DONE` and what is still `to do`:
+   - the model step skips the scenes already saved (`eval_bench.py --skip-existing`);
+   - the analysis skips every scoring whose record exists (the original DA3 and each variant;
+     `self_audit_eval.py --resume`);
+   - at most the scoring that was running at the disconnect is redone.
+
+   Files are written atomically and checked when loaded, so a half-copied file is recomputed, never
+   used. When a model is finished, its exports are deleted from Drive (`FREE_CHECKPOINT_WHEN_DONE`);
+   its results stay. To avoid disconnects, keep the tab open and the computer awake, and turn off
+   Chrome's Memory Saver for colab.research.google.com.
+5. **Same order as on Kaggle:**
    - first the quick check (`MAX_SCENES = 2`, the default);
    - then `MAX_SCENES = 0`, **one model per session** (`["da3-small"]`, then `["da3-base"]`).
-5. **Colab limits and compute units:**
+6. **Colab limits and compute units:**
    - The TSDF scoring runs on the CPU. `FUSION_WORKERS` is set from the runtime's cores and RAM
      (~6 GB each, at most 8). That gives 2 on a standard runtime (~12 GB RAM, 2 cores) and more
      on the bigger GPU runtimes. The worker count does not change the scores.
@@ -118,13 +135,11 @@ its records go into `experiments/results/` and appear in 09 like the Kaggle ones
      when a run ends, **Runtime → Disconnect and delete runtime**.
    - Full runs, one model per session, in one of two ways:
      - **Fastest:** `PHASE = "all"`. The model and all the scoring run in one session.
-     - **Fewer units, or if the session may be cut:**
-       1. GPU runtime, `PHASE = "infer"` with `KEEP_DUMP_ON_DRIVE = True`. Only the model runs;
-          the exports and dumps (several GB, check the free Drive space) are saved to Drive.
-       2. CPU runtime, `PHASE = "analyse"` and `RESUME_FROM_DRIVE = True`. It downloads the
-          benchmark data again and does all the scoring (original DA3 and Self-Audit) from the
-          saved dump.
-6. **GPU type and results.** The Self-Audit variants and the original DA3 come from the same model
+     - **Fewer units:** `PHASE = "infer"` on a GPU runtime (only the model), then `PHASE =
+       "analyse"` on a CPU runtime. The checkpoint carries the exports over; the CPU session
+       downloads the benchmark data again and does all the scoring.
+   - The checkpoint needs a few GB of free Drive space per full model.
+7. **GPU type and results.** The Self-Audit variants and the original DA3 come from the same model
    run, so the GPU type cannot favour either side. Across runs the GPU type changes only rounding
    (fp16 autocast on every GPU, fixed in `bench_adapter.py`); timings do depend on it, so note the
    GPU the first cell prints for each run.

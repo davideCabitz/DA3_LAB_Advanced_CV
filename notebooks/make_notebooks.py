@@ -598,17 +598,24 @@ What it measures: `docs/da3_enhancement_report.md` §4.2; how to save and compar
    Not the TPUs (the code needs CUDA). **CPU** is enough for `PHASE = "analyse"`.
 2. Private repo only: left bar → **key icon (Secrets)** → add `GITHUB_TOKEN` and switch on
    **Notebook access**.
-3. **Runtime → Run all**, and allow Google Drive access when asked: every finished model is copied
-   to Drive (`DRIVE_DIR`), because Colab deletes `/content` at the end of the session.
+3. **Runtime → Run all**, and allow Google Drive access when asked.
+
+**Checkpoints (on by default).** Colab deletes `/content` when the connection is lost, so the
+progress is saved to Drive (`DRIVE_DIR`) every few minutes and after every step.
+- **After a disconnect:** reconnect (any GPU; CPU if only the analysis is left), change nothing,
+  **Runtime → Run all**. Finished scenes and finished scorings are skipped; it continues from the
+  last save. At most the scoring that was running when the connection dropped is redone.
+- It needs free Drive space: a few GB for a full model (the exports). When a model is finished,
+  its exports are deleted from Drive (`FREE_CHECKPOINT_WHEN_DONE`); its results stay.
+- To avoid disconnects: keep this tab open and the computer awake (no sleep). In Chrome, turn off
+  Memory Saver for colab.research.google.com (Settings → Performance).
 
 **Compute units.** Colab charges for every hour the runtime is connected, even when it is idle: when
 a run ends, **Runtime → Disconnect and delete runtime**.
 - Start with the quick check (`MAX_SCENES = 2`, the default), `PHASE = "all"`.
-- Full runs: **one model per session**.
-  - Fastest: `PHASE = "all"` (model and scoring in one session; `FUSION_WORKERS` uses the extra
-    cores and RAM of the bigger runtimes).
-  - Fewer units, or if the session may be cut: `PHASE = "infer"` with `KEEP_DUMP_ON_DRIVE = True`
-    on the GPU, then a CPU runtime with `PHASE = "analyse"` and `RESUME_FROM_DRIVE = True`.
+- Full runs: **one model per session**, `PHASE = "all"`. To save units you can stop after the
+  model (`PHASE = "infer"`, GPU) and do the rest on a CPU runtime (`PHASE = "analyse"`): the
+  checkpoint carries the files over.
 - The GPU type changes only rounding, not the protocol; the first cell prints which GPU was used."""),
         code(COLAB_GPU),
         code(COLAB_SETUP),
@@ -619,10 +626,11 @@ a run ends, **Runtime → Disconnect and delete runtime**.
         code('''MODELS = ["da3-small"]                      # full runs: ONE model per session ("da3-small", then "da3-base")
 DATASETS = ["hiroom", "7scenes", "dtu64"]
 MAX_SCENES = 2        # 2 = quick end-to-end check (labelled "limited"); 0 = all scenes (the real numbers)
-PHASE = "all"         # "all" | "infer" (GPU: baseline run + dump) | "analyse" (CPU work, resumes from Drive)
-DRIVE_DIR = "/content/drive/MyDrive/DA3/self_audit_colab"   # results saved here; "" = no Drive (download at the end)
-KEEP_DUMP_ON_DRIVE = False   # True: also save the harness exports + dumps (several GB) so PHASE="analyse" can resume
-RESUME_FROM_DRIVE = False    # True (with PHASE="analyse"): copy the saved exports + dumps back from Drive first
+PHASE = "all"         # "all" | "infer" (GPU: model run + dump only) | "analyse" (CPU: scoring + analysis only)
+DRIVE_DIR = "/content/drive/MyDrive/DA3/self_audit_colab"   # results + checkpoints; "" = no Drive (a disconnect loses everything)
+CHECKPOINT = True     # save the progress to Drive; after a disconnect just "Run all" again and it continues
+SAVE_EVERY_MIN = 5    # background save interval (also saved after every step)
+FREE_CHECKPOINT_WHEN_DONE = True   # delete a finished model's exports from Drive (several GB); its results stay
 import psutil
 FUSION_WORKERS = max(1, min(os.cpu_count() or 1, int(psutil.virtual_memory().total / 2**30 // 6), 8))
 print("FUSION_WORKERS =", FUSION_WORKERS)   # parallel TSDF fusions, ~6 GB RAM each: 2 on a standard runtime, more on A100 / G4
@@ -634,26 +642,67 @@ DS = " ".join(DATASETS)
 def tag_for(m):
     return f"sa_{m}_{'-'.join(DATASETS)}" + (f"_limited{MAX_SCENES}" if MAX_SCENES else "")
 
-import shutil
-def to_drive(src, name, ignore=None):
-    """Copy a folder to DRIVE_DIR/<name> (merged with what is already there)."""
-    if DRIVE_DIR and os.path.exists(src):
-        shutil.copytree(src, f"{DRIVE_DIR}/{name}", dirs_exist_ok=True, ignore=ignore)
-        print("saved to Drive:", f"{DRIVE_DIR}/{name}")
-NO_BENCH_LINK = shutil.ignore_patterns("benchmark_dataset")   # never copy the benchmark data itself
-
+import shutil, subprocess, threading, time
 os.makedirs(RESULTS, exist_ok=True)
 if DRIVE_DIR:
     from google.colab import drive
     drive.mount("/content/drive")
     os.makedirs(DRIVE_DIR, exist_ok=True)
-if RESUME_FROM_DRIVE:
-    assert DRIVE_DIR and os.path.exists(f"{DRIVE_DIR}/eval_self_audit"), "nothing to resume: run PHASE='infer' with KEEP_DUMP_ON_DRIVE=True first"
-    shutil.copytree(f"{DRIVE_DIR}/eval_self_audit", WORK, dirs_exist_ok=True)
-    if os.path.exists(f"{DRIVE_DIR}/self_audit/results"):
-        shutil.copytree(f"{DRIVE_DIR}/self_audit/results", RESULTS, dirs_exist_ok=True)
-    print("resumed from Drive:", sorted(os.listdir(RESULTS)))
-print({m: tag_for(m) for m in MODELS})'''),
+if shutil.which("rsync") is None:
+    !apt-get -qq install -y rsync > /dev/null
+CKPT_WORK, CKPT_OUT = f"{DRIVE_DIR}/eval_self_audit", f"{DRIVE_DIR}/self_audit"
+CKPT_ON = bool(DRIVE_DIR and CHECKPOINT)
+_ckpt_lock = threading.Lock()
+
+def _rsync(src, dst, *opts):
+    os.makedirs(dst, exist_ok=True)
+    r = subprocess.run(["rsync", "-r", *opts, f"{src}/", f"{dst}/"], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+    if r.returncode not in (0, 24):   # 24 = a file vanished while copying (normal while scripts run)
+        print(f"[checkpoint] rsync {src} -> {dst}: exit {r.returncode}: {r.stderr[-300:]}")
+
+def save_checkpoint():
+    """Copy what changed to Drive: exports + dumps (not the benchmark data, not the temporary replay
+    copies, not half-written files) and the results / figures."""
+    if not CKPT_ON:
+        return
+    with _ckpt_lock:
+        if os.path.exists(WORK):
+            _rsync(WORK, CKPT_WORK, "--size-only", "--exclude=benchmark_dataset", "--exclude=*__*", "--exclude=*.partial.npz")
+        if os.path.exists(OUT):
+            _rsync(OUT, CKPT_OUT, "--checksum")
+
+def _autosave():
+    while True:
+        time.sleep(SAVE_EVERY_MIN * 60)
+        try:
+            save_checkpoint()
+        except Exception as e:
+            print("[checkpoint] save failed:", e)
+
+def is_done(path):
+    """A finished step leaves a complete JSON record (a truncated copy does not count)."""
+    try:
+        json.load(open(path)); return True
+    except Exception:
+        return False
+def record(enh, tag):
+    return f"{RESULTS}/{enh}/{tag}.json"
+def infer_marker(t):
+    return f"{WORK}/.done_infer_{t}"
+
+if CKPT_ON:   # restore: never overwrites files of this session, only brings back what is missing
+    for src, dst in ((CKPT_WORK, WORK), (CKPT_OUT, OUT)):
+        if os.path.exists(src):
+            _rsync(src, dst, "--ignore-existing", "--exclude=*.partial.npz")
+    if not globals().get("_AUTOSAVE_STARTED"):
+        threading.Thread(target=_autosave, daemon=True).start()
+        _AUTOSAVE_STARTED = True
+for m in MODELS:
+    t = tag_for(m)
+    print(f"{t}: model run {'DONE' if os.path.exists(infer_marker(t)) or is_done(record('baseline', t)) else 'to do'} | "
+          f"original DA3 scored {'DONE' if is_done(record('baseline', t)) else 'to do'} | "
+          f"Self-Audit {'DONE' if is_done(record('self_audit', t + '__self_audit')) else 'to do'}")
+print("checkpoints:", f"on, every {SAVE_EVERY_MIN} min -> {DRIVE_DIR}" if CKPT_ON else "OFF (nothing survives a disconnect)")'''),
         md("### Data: DA3-BENCH subsets (HF `depth-anything/DA3-BENCH`)"),
         code('''from huggingface_hub import hf_hub_download
 import zipfile
@@ -666,40 +715,57 @@ for d in DATASETS:
         md("""### 1 · Original DA3 on the paper protocol + Self-Audit dump (GPU)
 Released harness, camera-head poses (API default). `--dump-audit` also saves, next to each scene's
 export, the ray-map poses (official RANSAC routine and our DLT), a pooled ray map and the E_c
-re-pass (DA3 conditioned on its own cameras). The exported depth / poses are unchanged."""),
+re-pass (DA3 conditioned on its own cameras). The exported depth / poses are unchanged.
+Resumable: scenes already saved (checkpoint) are not run again (`--skip-existing`)."""),
         code('''if PHASE in ("all", "infer"):
-    assert torch.cuda.is_available(), ("This step runs the model and needs a GPU: Runtime > Change runtime type > "
-                                       "T4 / L4 / A100 / G4 GPU (or set PHASE = 'analyse' for a CPU session)")
     for m in MODELS:
         t = tag_for(m)
+        if os.path.exists(infer_marker(t)) or is_done(record("baseline", t)):
+            print(f"[checkpoint] {t}: model run already complete, skipped")
+            continue
+        assert torch.cuda.is_available(), ("This step runs the model and needs a GPU: Runtime > Change runtime type > "
+                                           "T4 / L4 / A100 / G4 GPU (or set PHASE = 'analyse' for a CPU session)")
+        _exit_code = None
         if SPLIT:   # only the model here (GPU); its scores are computed in step 2 (Python 3.12, CPU)
             !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
                 --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
-                --tag {t} --dump-audit --infer-only
+                --tag {t} --dump-audit --infer-only --skip-existing
         else:
             !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
                 --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
                 --tag {t} --enhancement baseline --variant head --dump-audit --results-root {RESULTS} \\
-                --fusion-workers {FUSION_WORKERS}
-        to_drive(RESULTS, "self_audit/results")
-        if KEEP_DUMP_ON_DRIVE:
-            to_drive(WORK, "eval_self_audit", ignore=NO_BENCH_LINK)
+                --fusion-workers {FUSION_WORKERS} --skip-existing
+        if _exit_code == 0:   # set by the "!" command; marks the model run as complete
+            open(infer_marker(t), "w").close()
+        save_checkpoint()
 !du -sh {WORK}'''),
         md("""### 2 · Self-Audit analysis (CPU)
 Signals → per-view GT errors → audit model (leave-one-dataset-out) → A and C metrics, then the
-pose-source variants are written with the **same depth** and scored by the harness (`--eval-only`)."""),
+pose-source variants are written with the **same depth** and scored by the harness (`--eval-only`).
+Resumable: every finished scoring (original DA3, each variant) is skipped (`--resume`)."""),
         code('''if PHASE in ("all", "analyse"):
     for m in MODELS:
         t = tag_for(m)
-        if SPLIT:   # scores of the original DA3 run (Python 3.12, CPU), from the exports of step 1
+        if is_done(record("self_audit", f"{t}__self_audit")):
+            print(f"[checkpoint] {t}: Self-Audit analysis already complete, skipped")
+            continue
+        if SPLIT and not is_done(record("baseline", t)):   # scores of the original DA3 run (Python 3.12, CPU)
             !{PY312} scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
                 --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
                 --tag {t} --enhancement baseline --variant head --eval-only --results-root {RESULTS} \\
                 --fusion-workers {FUSION_WORKERS}
+            save_checkpoint()
+        elif SPLIT:
+            print(f"[checkpoint] {t}: original DA3 already scored, skipped")
         !{SCORER} scripts/self_audit_eval.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
             --baseline-tag {t} --weights official:{m} --datasets {DS} --max-scenes {MAX_SCENES} \\
-            --results-root {RESULTS} --out-dir {OUT}/{t} --fusion-workers {FUSION_WORKERS} {RECON_VARIANTS}
-        to_drive(OUT, "self_audit")   # summary, figures, CSV and records of this model'''),
+            --results-root {RESULTS} --out-dir {OUT}/{t} --fusion-workers {FUSION_WORKERS} {RECON_VARIANTS} --resume
+        save_checkpoint()   # summary, figures, CSV and records of this model
+        if CKPT_ON and FREE_CHECKPOINT_WHEN_DONE and is_done(record("self_audit", f"{t}__self_audit")):
+            with _ckpt_lock:   # exports no longer needed (results saved); the "done" marker stays
+                for root in (CKPT_WORK, WORK):
+                    shutil.rmtree(f"{root}/workspace/evaluation/{t}", ignore_errors=True)
+            print(f"[checkpoint] {t}: finished; its exports were removed from Drive (results kept in {CKPT_OUT})")'''),
         md("### 3 · Results: original DA3 vs DA3 + Self-Audit"),
         code('''from IPython.display import Image, Markdown, display
 for m in MODELS:

@@ -184,3 +184,41 @@ def test_adapter_dump_does_not_change_the_exported_results(tmp_path):
         assert k in d, k
     assert d["head_w2c"].shape == (3, 3, 4) and d["ray_ds"].shape[-1] == 6
     assert np.allclose(d["head_w2c"], outs["plain"]["extrinsics"], atol=1e-5)
+
+
+def test_adapter_resume_skips_complete_scenes_only(tmp_path):
+    """skip_existing: a complete export + dump is reused (model not run); a missing or truncated
+    dump is recomputed; no temporary files are left behind."""
+    cv2 = pytest.importorskip("cv2")
+    from da3.enhancements.self_audit import AuditDumper
+    from da3.eval.bench_adapter import OursAsOfficialAPI
+    from helpers import tiny_model
+
+    rng = np.random.default_rng(1)
+    files = []
+    for i in range(2):
+        p = tmp_path / f"im{i}.png"
+        cv2.imwrite(str(p), rng.integers(0, 255, (60, 80, 3), dtype=np.uint8))
+        files.append(str(p))
+    model = tiny_model("da3-small")
+    export = tmp_path / "scene"
+    first = OursAsOfficialAPI(model, "cpu", process_res=98, amp=False, dumper=AuditDumper(ray_solver=None, repass=False))
+    first.inference(files, export_dir=str(export))
+    res_path = export / "exports" / "mini_npz" / "results.npz"
+    dump_path = export / "exports" / "audit_dump.npz"
+    saved = dict(np.load(res_path))
+    assert not list(export.rglob("*.partial.npz"))
+
+    again = OursAsOfficialAPI(model, "cpu", process_res=98, amp=False, skip_existing=True,
+                              dumper=AuditDumper(ray_solver=None, repass=False))
+    pred = again.inference(files, export_dir=str(export))
+    assert again.skipped == 1 and again.timings == []
+    for k in ("depth", "conf", "extrinsics", "intrinsics"):
+        assert np.array_equal(pred[k], saved[k]), k
+
+    dump_path.write_bytes(dump_path.read_bytes()[:100])  # truncated copy (interrupted sync)
+    third = OursAsOfficialAPI(model, "cpu", process_res=98, amp=False, skip_existing=True,
+                              dumper=AuditDumper(ray_solver=None, repass=False))
+    third.inference(files, export_dir=str(export))
+    assert third.skipped == 0 and len(third.timings) == 1
+    assert "head_w2c" in np.load(dump_path)

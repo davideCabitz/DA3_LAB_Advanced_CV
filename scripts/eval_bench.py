@@ -113,6 +113,8 @@ def main():
     ap.add_argument("--eval-only", action="store_true")
     ap.add_argument("--infer-only", action="store_true",
                     help="run the model and write the exports, but do not score them (no metrics, no record)")
+    ap.add_argument("--skip-existing", action="store_true",
+                    help="resume: do not run the model again on scenes whose exports (and audit dump) are complete")
     ap.add_argument("--tag", required=True)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     # standard result record (da3.compare) and enhancement hooks
@@ -174,7 +176,7 @@ def main():
             api.dumper = dumper
         else:
             api = OursAsOfficialAPI(model, args.device, use_ray_pose=args.use_ray_pose, dumper=dumper,
-                                    process_res=args.process_res)
+                                    process_res=args.process_res, skip_existing=args.skip_existing)
     else:
         from depth_anything_3.api import DepthAnything3  # noqa: E402
 
@@ -184,6 +186,8 @@ def main():
         setting, winfo = "official (released code)", {"weights": repo}
     if not args.eval_only:
         ev.infer(api)
+        if getattr(api, "skipped", 0):
+            print(f"[eval_bench] resumed: {api.skipped} scene(s) already done, not run again")
     t_inf = time.time() - t0
     if args.infer_only:  # scoring happens in a separate --eval-only run (e.g. the Python 3.12 environment)
         if dumper is not None and dumper.failures:
