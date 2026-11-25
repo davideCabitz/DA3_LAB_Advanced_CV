@@ -155,8 +155,15 @@ Environment:
 - ❌ **Don't `pip install -e` the official Depth-Anything-3 repo.** It pins `numpy<2` and pulls
   `xformers`, which breaks the Kaggle image. The notebooks only put it on `sys.path`.
 - ❌ **Don't ignore the Open3D self-test** (`open3d_check.json`, printed after the install cell). If
-  `legacy_tsdf_ok` is `false`, TSDF fusion is broken in that environment and reconstruction F1 would be
-  wrong. `03_eval` stops automatically; send me the file.
+  `legacy_tsdf_ok` is `false`, TSDF fusion is broken in that environment.
+  - **Why it happens:** Kaggle and Colab now run Python 3.13, which only gets Open3D 0.20.0, a known
+    bug ([isl-org/Open3D#7592](https://github.com/isl-org/Open3D/issues/7592)).
+  - **What `03_eval` and `05_self_audit` do then:** they install a Python 3.12 + Open3D 0.19.0 side
+    environment (CPU, a few minutes). The model runs on the GPU as usual (`--infer-only`), and the
+    scoring, including F1 / Chamfer (Tab. 3), runs in that environment (`--eval-only`). The
+    results are complete.
+  - **If the side environment also fails:** the runs fall back to **pose only**. The cell says so,
+    and F1 shows "–" instead of a wrong number. Don't report Tab. 3 numbers from such a run.
 - ❌ **Don't reinstall or upgrade `torch`.** If a Kaggle image update breaks something, pin the
   notebook environment (Session options > Environment) to the date of a run that worked.
 - ❌ **Don't put large data in `/kaggle/working`** (20 GB output limit). Benchmark zips and raw

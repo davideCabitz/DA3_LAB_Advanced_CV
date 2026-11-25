@@ -73,13 +73,19 @@ experiments/results/<enhancement>/<tag>.json
 - Kaggle and Colab now run Python 3.13, which only gets Open3D 0.20.0. Its TSDF fusion returns empty
   meshes, a known bug ([isl-org/Open3D#7592](https://github.com/isl-org/Open3D/issues/7592)); the
   working 0.19.0 only exists up to Python 3.12.
-- The notebooks check this. When TSDF is broken, they run **without the reconstruction scores**
-  (F1 / Chamfer) instead of stopping:
-  - the baseline and the pose variants use `--modes pose`;
-  - the records then contain AUC only.
+- The notebooks check this. When TSDF is broken, they install a small **Python 3.12 side
+  environment** with Open3D 0.19.0 (CPU only, a few minutes, `/tmp/py312`) and split each benchmark
+  run in two:
+  1. DA3 runs on the GPU in the notebook's Python (`eval_bench.py --infer-only`, which writes the
+     exports and the Self-Audit dump);
+  2. the scoring, including TSDF and F1 / Chamfer, and the Self-Audit analysis run in Python 3.12
+     (`--eval-only`, `self_audit_eval.py`).
+
+  The results are the same as with a working Open3D.
+- Only if the side environment fails as well do the runs fall back to **pose only** (`--modes pose`,
+  AUC without F1); the cell output says so.
 - Failure detection (A), depth uncertainty (C) and pose accuracy (B, AUC) don't use Open3D and are
-  complete.
-- The printed message says which case applies.
+  complete in every case.
 
 ## 2b. Run 05 on Google Colab instead (`05_self_audit_colab`)
 

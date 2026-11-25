@@ -39,6 +39,11 @@ if not os.path.exists("/kaggle/working/Depth-Anything-3"):
 subprocess.run(["git", "-C", "/kaggle/working/Depth-Anything-3", "checkout", "{OFFICIAL_COMMIT}"], check=True)
 OFFICIAL_SRC = "/kaggle/working/Depth-Anything-3/src"
 !pip install -q -r requirements-eval.txt
+# Open3D: requirements-eval installs the newest one; 0.20.0's TSDF returns empty meshes (isl-org/Open3D#7592),
+# so use the verified 0.19.0 where it exists (Python <= 3.12)
+import sys
+if sys.version_info[:2] <= (3, 12):
+    !pip install -q "open3d==0.19.0"
 # Open3D self-test: does TSDF fusion (depth maps -> mesh) work in this environment?
 !python scripts/check_open3d.py --out /kaggle/working/open3d_check.json'''
 
@@ -102,6 +107,34 @@ else:
           "and depth uncertainty are not affected.")
 MODES = "pose recon_unposed" if RECON else "pose"
 RECON_VARIANTS = "" if RECON else "--recon-variants"   # an empty list = pose-only harness replays'''
+
+SCORING_ENV = r'''# --- reconstruction scores: Python 3.12 side environment (only when the Open3D above is broken) --------
+# Kaggle / Colab run Python 3.13, whose only Open3D (0.20.0) has a broken TSDF fusion (isl-org/Open3D#7592),
+# and the working 0.19.0 needs Python <= 3.12. The scoring (CPU only: TSDF fusion, F1 / Chamfer, pose AUC)
+# then runs in a small Python 3.12 environment; DA3 itself still runs on the GPU in this notebook's Python.
+import json, os
+PY312 = "/tmp/py312/bin/python"
+SPLIT = False   # True = model in this Python (--infer-only), scores in PY312 (--eval-only)
+if not RECON:
+    !pip install -q uv
+    !uv python install 3.12
+    if not os.path.exists(PY312):
+        !uv venv /tmp/py312 --python 3.12
+    !uv pip install -q --python {PY312} torch torchvision --index-url https://download.pytorch.org/whl/cpu
+    !uv pip install -q --python {PY312} numpy scipy matplotlib "open3d==0.19.0" "evo==1.38.1" addict scikit-learn tqdm omegaconf PyYAML trimesh plyfile einops safetensors huggingface_hub opencv-python-headless pillow imageio "moviepy<2"
+    !uv pip install -q --python {PY312} --no-deps -e .
+    !{PY312} scripts/check_open3d.py --out /tmp/open3d_check_py312.json
+    try:
+        SPLIT = bool(json.load(open("/tmp/open3d_check_py312.json"))["legacy_tsdf_ok"])
+    except Exception as e:
+        print("Python 3.12 scoring environment not usable:", repr(e))
+    if SPLIT:
+        MODES, RECON_VARIANTS = "__FULL_MODES__", ""
+        print("OK: the reconstruction scores (F1 / Chamfer) are computed with Python 3.12 + Open3D 0.19.0.")
+    else:
+        print("The Python 3.12 scoring environment does not work either: this run stays POSE ONLY. "
+              "Send the output of this cell.")
+SCORER = PY312 if SPLIT else "python"   # the Python that scores (and runs the analyses)'''
 
 COLAB_GPU = '''import torch
 !nvidia-smi -L
@@ -223,11 +256,9 @@ Data: HF `depth-anything/DA3-BENCH` (HiRoom 0.7 GB, DTU-64 1.8 GB, 7Scenes 3.6 G
 ScanNet++ 10.8 GB, ETH3D 15.1 GB). Limited runs are labelled by `--max-scenes`."""),
         code(SETUP),
         code(OFFICIAL),
-        code('''import json
-chk = json.load(open("/kaggle/working/open3d_check.json"))
-assert chk["legacy_tsdf_ok"], ("Open3D TSDF fusion is broken here, so reconstruction metrics would be wrong. "
-                               "Stop and send open3d_check.json.")
-print("Open3D TSDF OK:", chk["open3d"])'''),
+        code(RECON_CHECK.replace("__PATH__", "/kaggle/working/open3d_check.json")
+             + '\nMODES = "pose recon_unposed recon_posed" if RECON else "pose"   # this notebook also scores recon_posed'),
+        code(SCORING_ENV.replace("__FULL_MODES__", "pose recon_unposed recon_posed")),
         md("### Our metric code vs the released benchmark functions (should be ~0)"),
         code("!python scripts/check_metrics_vs_official.py --official-src {OFFICIAL_SRC} | tee /kaggle/working/metrics_crosscheck.json"),
         code('''from huggingface_hub import hf_hub_download
@@ -245,9 +276,17 @@ for w, tag in [("official:da3-small", "official_da3-small"), ("official:da3-base
               ([(CKPT, "reduced_vits")] if CKPT else []):
     ds = " ".join(DATASETS)
     t = f"{tag}_{'-'.join(DATASETS)}" + (f"_limited{MAX_SCENES}" if MAX_SCENES else "")
-    !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} \\
-        --work-root /tmp/eval --weights {w} --datasets {ds} \\
-        --modes pose recon_unposed recon_posed --max-scenes {MAX_SCENES} --tag {t}'''),
+    if SPLIT:   # the model here (GPU), the scores in the Python 3.12 environment (CPU)
+        !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} \\
+            --work-root /tmp/eval --weights {w} --datasets {ds} \\
+            --modes {MODES} --max-scenes {MAX_SCENES} --tag {t} --infer-only
+        !{PY312} scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} \\
+            --work-root /tmp/eval --weights {w} --datasets {ds} \\
+            --modes {MODES} --max-scenes {MAX_SCENES} --tag {t} --eval-only
+    else:
+        !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} \\
+            --work-root /tmp/eval --weights {w} --datasets {ds} \\
+            --modes {MODES} --max-scenes {MAX_SCENES} --tag {t}'''),
         code("!python scripts/make_tables.py --out /kaggle/working/results_tables.md && cat /kaggle/working/results_tables.md"),
     ],
     "04_demo_export": [
@@ -442,6 +481,7 @@ Outputs (in `/kaggle/working/`): `self_audit/<tag>/` (summary.md, figures, per_v
         code(SETUP),
         code(OFFICIAL),
         code(RECON_CHECK.replace("__PATH__", "/kaggle/working/open3d_check.json")),
+        code(SCORING_ENV.replace("__FULL_MODES__", "pose recon_unposed")),
         md("### Configuration"),
         code('''MODELS = ["da3-small"]                      # full runs: ONE model per session ("da3-small", then "da3-base")
 DATASETS = ["hiroom", "7scenes", "dtu64"]   # add "eth3d", "scannetpp" in a later session (15 / 11 GB)
@@ -477,9 +517,17 @@ re-pass (DA3 conditioned on its own cameras). The exported depth / poses are unc
         code('''if PHASE in ("all", "infer"):
     for m in MODELS:
         t = tag_for(m)
-        !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
-            --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
-            --tag {t} --enhancement baseline --variant head --dump-audit --results-root {RESULTS}
+        if SPLIT:   # the model here (GPU), the scores in the Python 3.12 environment (CPU)
+            !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
+                --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
+                --tag {t} --dump-audit --infer-only
+            !{PY312} scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
+                --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
+                --tag {t} --enhancement baseline --variant head --eval-only --results-root {RESULTS}
+        else:
+            !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
+                --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
+                --tag {t} --enhancement baseline --variant head --dump-audit --results-root {RESULTS}
 !du -sh {WORK}'''),
         md("""### 2 · Self-Audit analysis (CPU)
 Signals → per-view GT errors → audit model (leave-one-dataset-out) → A and C metrics, then the
@@ -487,7 +535,7 @@ pose-source variants are written with the **same depth** and scored by the harne
         code('''if PHASE in ("all", "analyse"):
     for m in MODELS:
         t = tag_for(m)
-        !python scripts/self_audit_eval.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
+        !{SCORER} scripts/self_audit_eval.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
             --baseline-tag {t} --weights official:{m} --datasets {DS} --max-scenes {MAX_SCENES} \\
             --results-root {RESULTS} --out-dir {OUT}/{t} {RECON_VARIANTS}'''),
         md("### 3 · Results: original DA3 vs DA3 + Self-Audit"),
@@ -542,6 +590,7 @@ What it measures: `docs/da3_enhancement_report.md` §4.2; how to save and compar
         code(COLAB_SETUP),
         code(COLAB_OFFICIAL),
         code(RECON_CHECK.replace("__PATH__", "/content/open3d_check.json")),
+        code(SCORING_ENV.replace("__FULL_MODES__", "pose recon_unposed")),
         md("### Configuration"),
         code('''MODELS = ["da3-small"]                      # full runs: ONE model per session ("da3-small", then "da3-base")
 DATASETS = ["hiroom", "7scenes", "dtu64"]
@@ -595,10 +644,19 @@ re-pass (DA3 conditioned on its own cameras). The exported depth / poses are unc
         code('''if PHASE in ("all", "infer"):
     for m in MODELS:
         t = tag_for(m)
-        !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
-            --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
-            --tag {t} --enhancement baseline --variant head --dump-audit --results-root {RESULTS} \\
-            --fusion-workers {FUSION_WORKERS}
+        if SPLIT:   # the model here (GPU), the scores in the Python 3.12 environment (CPU)
+            !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
+                --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
+                --tag {t} --dump-audit --infer-only
+            !{PY312} scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
+                --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
+                --tag {t} --enhancement baseline --variant head --eval-only --results-root {RESULTS} \\
+                --fusion-workers {FUSION_WORKERS}
+        else:
+            !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
+                --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
+                --tag {t} --enhancement baseline --variant head --dump-audit --results-root {RESULTS} \\
+                --fusion-workers {FUSION_WORKERS}
         to_drive(RESULTS, "self_audit/results")
         if KEEP_DUMP_ON_DRIVE:
             to_drive(WORK, "eval_self_audit", ignore=NO_BENCH_LINK)
@@ -609,7 +667,7 @@ pose-source variants are written with the **same depth** and scored by the harne
         code('''if PHASE in ("all", "analyse"):
     for m in MODELS:
         t = tag_for(m)
-        !python scripts/self_audit_eval.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
+        !{SCORER} scripts/self_audit_eval.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
             --baseline-tag {t} --weights official:{m} --datasets {DS} --max-scenes {MAX_SCENES} \\
             --results-root {RESULTS} --out-dir {OUT}/{t} --fusion-workers {FUSION_WORKERS} {RECON_VARIANTS}
         to_drive(OUT, "self_audit")   # summary, figures, CSV and records of this model'''),

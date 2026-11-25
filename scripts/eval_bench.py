@@ -25,6 +25,9 @@ Enhancement hooks:
   official RANSAC ray poses + E_c re-pass). The exported results are unchanged.
 * `--eval-only`: score exports that already exist in <work-root>/workspace/evaluation/<tag>
   (e.g. pose-source variants written by scripts/self_audit_eval.py). No model is loaded.
+* `--infer-only`: the opposite: run the model and write the exports, no scoring. Used when the
+  scoring must run in another Python (Kaggle / Colab Python 3.13 only get Open3D 0.20.0, whose TSDF
+  fusion is broken, so the notebooks score in a Python 3.12 + Open3D 0.19.0 side environment).
 * `--process-res R`: run the original DA3 at another uniform resolution (default 504, the paper's).
 * `--meter`: also write per-scene efficiency meta (tokens, time, peak memory) next to each export;
   predictions unchanged (enhancement #2 uses it for the uniform-resolution rows).
@@ -108,6 +111,8 @@ def main():
     ap.add_argument("--use-ray-pose", action="store_true")
     ap.add_argument("--fusion-workers", type=int, default=4)
     ap.add_argument("--eval-only", action="store_true")
+    ap.add_argument("--infer-only", action="store_true",
+                    help="run the model and write the exports, but do not score them (no metrics, no record)")
     ap.add_argument("--tag", required=True)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     # standard result record (da3.compare) and enhancement hooks
@@ -125,6 +130,8 @@ def main():
     args = ap.parse_args()
     if args.foveated and (args.dump_audit or args.engine != "ours"):
         ap.error("--foveated needs --engine ours and cannot be combined with --dump-audit")
+    if args.eval_only and args.infer_only:
+        ap.error("--eval-only and --infer-only are mutually exclusive")
 
     from da3.eval.harness import prepare_workspace
 
@@ -178,6 +185,12 @@ def main():
     if not args.eval_only:
         ev.infer(api)
     t_inf = time.time() - t0
+    if args.infer_only:  # scoring happens in a separate --eval-only run (e.g. the Python 3.12 environment)
+        if dumper is not None and dumper.failures:
+            print("[WARN] audit dump issues:\n  " + "\n  ".join(dumper.failures))
+        print(f"[eval_bench] inference done in {t_inf:.0f} s; exports in {work_dir}. "
+              f"Score them with the same arguments and --eval-only.")
+        return
     metrics = ev.eval()
     t_all = time.time() - t0
 
