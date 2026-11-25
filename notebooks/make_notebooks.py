@@ -136,9 +136,22 @@ if not RECON:
               "Send the output of this cell.")
 SCORER = PY312 if SPLIT else "python"   # the Python that scores (and runs the analyses)'''
 
+_GPU_SMOKE = '''    !nvidia-smi -L
+    _x = torch.randn(1, 4, 64, 32, device="cuda", dtype=torch.float16)   # fails here at once if this torch build
+    torch.nn.functional.scaled_dot_product_attention(_x, _x, _x)         # does not support the GPU (not after the downloads)
+    print("GPU OK:", torch.cuda.get_device_name(0), "| compute capability", torch.cuda.get_device_capability(0))'''
+
 COLAB_GPU = '''import torch
-!nvidia-smi -L
-assert torch.cuda.is_available(), "No GPU: Runtime > Change runtime type > T4 GPU, then Runtime > Run all again"'''
+if torch.cuda.is_available():
+''' + _GPU_SMOKE + '''
+else:
+    print("No GPU in this runtime. Fine for analysis-only sessions (CPU work); "
+          "for running the model choose a GPU: Runtime > Change runtime type.")'''
+
+COLAB_GPU_REQUIRED = '''import torch
+assert torch.cuda.is_available(), "No GPU: Runtime > Change runtime type > T4 (or L4, A100, G4) GPU, then run all again."
+if True:
+''' + _GPU_SMOKE
 
 # per-notebook metadata (Colab: open with a T4 GPU runtime)
 _COLAB_T4 = {"accelerator": "GPU", "colab": {"gpuType": "T4", "provenance": []}}
@@ -356,7 +369,11 @@ Same as `04_demo_export`, for **Google Colab** (no Kaggle queue). Original DA3, 
 feed-forward, no training. See docs/KAGGLE_EXAMPLES.md §8.
 
 **Before running**
-1. **Runtime → Change runtime type → T4 GPU** (this notebook asks for it; check it is selected).
+1. **Runtime → Change runtime type**: the first GPU that connects, cheapest first,
+   **T4 → L4 → A100 → G4** (if one does not connect within a few minutes, pick the next; all give
+   the same result). Not the TPUs (the code needs CUDA).
+   When the zips are saved, **Runtime → Disconnect and delete runtime** (a connected runtime keeps
+   using units).
 2. Private repo only: left bar → **key icon (Secrets)** → add `GITHUB_TOKEN` (the same token as on
    Kaggle) and switch on **Notebook access**.
 3. Your photos, one of the two:
@@ -367,7 +384,7 @@ feed-forward, no training. See docs/KAGGLE_EXAMPLES.md §8.
 
 Results: `/content/demo/<name>/` and `<name>.zip`. Colab deletes `/content` when the session ends,
 so the last cell copies the zips to Drive (`SAVE_TO_DRIVE`) or downloads them."""),
-        code(COLAB_GPU),
+        code(COLAB_GPU_REQUIRED),
         code(COLAB_SETUP),
         code(COLAB_OPEN3D),
         md("### Your inputs"),
@@ -517,13 +534,10 @@ re-pass (DA3 conditioned on its own cameras). The exported depth / poses are unc
         code('''if PHASE in ("all", "infer"):
     for m in MODELS:
         t = tag_for(m)
-        if SPLIT:   # the model here (GPU), the scores in the Python 3.12 environment (CPU)
+        if SPLIT:   # only the model here (GPU); its scores are computed in step 2 (Python 3.12, CPU)
             !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
                 --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
                 --tag {t} --dump-audit --infer-only
-            !{PY312} scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
-                --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
-                --tag {t} --enhancement baseline --variant head --eval-only --results-root {RESULTS}
         else:
             !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
                 --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
@@ -535,6 +549,10 @@ pose-source variants are written with the **same depth** and scored by the harne
         code('''if PHASE in ("all", "analyse"):
     for m in MODELS:
         t = tag_for(m)
+        if SPLIT:   # scores of the original DA3 run (Python 3.12, CPU), from the exports of step 1
+            !{PY312} scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
+                --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
+                --tag {t} --enhancement baseline --variant head --eval-only --results-root {RESULTS}
         !{SCORER} scripts/self_audit_eval.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
             --baseline-tag {t} --weights official:{m} --datasets {DS} --max-scenes {MAX_SCENES} \\
             --results-root {RESULTS} --out-dir {OUT}/{t} {RECON_VARIANTS}'''),
@@ -573,19 +591,25 @@ What it measures: `docs/da3_enhancement_report.md` §4.2; how to save and compar
 `docs/ENHANCEMENTS_RUNBOOK.md` (§2b for Colab).
 
 **Before running**
-1. **Runtime → Change runtime type → T4 GPU** (this notebook asks for it; check it is selected).
+1. **Runtime → Change runtime type**: the first GPU that connects, cheapest first,
+   **T4 → L4 → A100 → G4** (about 1.2 / 1.7 / 5.4 / 8.7 compute units per hour; the real rate is
+   under **Resources**). If one does not connect within a few minutes, pick the next. All four give
+   the same numbers (the model runs in fp16 on every GPU); the first cell checks the GPU in seconds.
+   Not the TPUs (the code needs CUDA). **CPU** is enough for `PHASE = "analyse"`.
 2. Private repo only: left bar → **key icon (Secrets)** → add `GITHUB_TOKEN` and switch on
    **Notebook access**.
 3. **Runtime → Run all**, and allow Google Drive access when asked: every finished model is copied
    to Drive (`DRIVE_DIR`), because Colab deletes `/content` at the end of the session.
 
-**Colab limits.** Free sessions disconnect when idle or after a few hours, have ~12 GB of RAM and
-2 CPU cores (the TSDF scoring is CPU work and is slower than on Kaggle).
-- Start with the quick check (`MAX_SCENES = 2`, the default).
-- For full runs, use **one model per session**. If a session is likely to be cut, split it:
-  `PHASE = "infer"` with `KEEP_DUMP_ON_DRIVE = True` (the GPU part; its files go to Drive), then a
-  new session with `PHASE = "analyse"` and `RESUME_FROM_DRIVE = True`.
-- Use the same GPU type (T4) for all runs you compare."""),
+**Compute units.** Colab charges for every hour the runtime is connected, even when it is idle: when
+a run ends, **Runtime → Disconnect and delete runtime**.
+- Start with the quick check (`MAX_SCENES = 2`, the default), `PHASE = "all"`.
+- Full runs: **one model per session**.
+  - Fastest: `PHASE = "all"` (model and scoring in one session; `FUSION_WORKERS` uses the extra
+    cores and RAM of the bigger runtimes).
+  - Fewer units, or if the session may be cut: `PHASE = "infer"` with `KEEP_DUMP_ON_DRIVE = True`
+    on the GPU, then a CPU runtime with `PHASE = "analyse"` and `RESUME_FROM_DRIVE = True`.
+- The GPU type changes only rounding, not the protocol; the first cell prints which GPU was used."""),
         code(COLAB_GPU),
         code(COLAB_SETUP),
         code(COLAB_OFFICIAL),
@@ -599,7 +623,9 @@ PHASE = "all"         # "all" | "infer" (GPU: baseline run + dump) | "analyse" (
 DRIVE_DIR = "/content/drive/MyDrive/DA3/self_audit_colab"   # results saved here; "" = no Drive (download at the end)
 KEEP_DUMP_ON_DRIVE = False   # True: also save the harness exports + dumps (several GB) so PHASE="analyse" can resume
 RESUME_FROM_DRIVE = False    # True (with PHASE="analyse"): copy the saved exports + dumps back from Drive first
-FUSION_WORKERS = 2           # parallel TSDF fusions (Colab has ~12 GB RAM; Kaggle uses 4)
+import psutil
+FUSION_WORKERS = max(1, min(os.cpu_count() or 1, int(psutil.virtual_memory().total / 2**30 // 6), 8))
+print("FUSION_WORKERS =", FUSION_WORKERS)   # parallel TSDF fusions, ~6 GB RAM each: 2 on a standard runtime, more on A100 / G4
 WORK = "/content/eval_self_audit"           # harness exports + audit dumps (large)
 OUT = "/content/self_audit"                 # figures, CSV, summaries
 RESULTS = f"{OUT}/results"                  # standard result records (commit these)
@@ -642,16 +668,14 @@ Released harness, camera-head poses (API default). `--dump-audit` also saves, ne
 export, the ray-map poses (official RANSAC routine and our DLT), a pooled ray map and the E_c
 re-pass (DA3 conditioned on its own cameras). The exported depth / poses are unchanged."""),
         code('''if PHASE in ("all", "infer"):
+    assert torch.cuda.is_available(), ("This step runs the model and needs a GPU: Runtime > Change runtime type > "
+                                       "T4 / L4 / A100 / G4 GPU (or set PHASE = 'analyse' for a CPU session)")
     for m in MODELS:
         t = tag_for(m)
-        if SPLIT:   # the model here (GPU), the scores in the Python 3.12 environment (CPU)
+        if SPLIT:   # only the model here (GPU); its scores are computed in step 2 (Python 3.12, CPU)
             !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
                 --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
                 --tag {t} --dump-audit --infer-only
-            !{PY312} scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
-                --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
-                --tag {t} --enhancement baseline --variant head --eval-only --results-root {RESULTS} \\
-                --fusion-workers {FUSION_WORKERS}
         else:
             !python scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
                 --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
@@ -667,6 +691,11 @@ pose-source variants are written with the **same depth** and scored by the harne
         code('''if PHASE in ("all", "analyse"):
     for m in MODELS:
         t = tag_for(m)
+        if SPLIT:   # scores of the original DA3 run (Python 3.12, CPU), from the exports of step 1
+            !{PY312} scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
+                --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
+                --tag {t} --enhancement baseline --variant head --eval-only --results-root {RESULTS} \\
+                --fusion-workers {FUSION_WORKERS}
         !{SCORER} scripts/self_audit_eval.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
             --baseline-tag {t} --weights official:{m} --datasets {DS} --max-scenes {MAX_SCENES} \\
             --results-root {RESULTS} --out-dir {OUT}/{t} --fusion-workers {FUSION_WORKERS} {RECON_VARIANTS}

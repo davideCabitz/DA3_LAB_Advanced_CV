@@ -7,7 +7,7 @@ enhancements. The enhancements, their novelty check and the plan are in
 | Notebook | What it does | Accelerator |
 |---|---|---|
 | `05_self_audit` | Enhancement #1, DA3 Self-Audit: original DA3 vs DA3 + Self-Audit | GPU (one pass per model), the rest CPU |
-| `05_self_audit_colab` | the same, on Google Colab (§2b) | Colab T4 GPU |
+| `05_self_audit_colab` | the same, on Google Colab (§2b) | Colab GPU (T4 → L4 → A100 → G4) |
 | `06_foveated` | Enhancement #2, Foveated DA3: mixed per-view resolutions in one pass (view level + region zoom) | GPU; region zoom in its own session |
 | `07_…` | reserved for enhancement #3 (pose-conditioned self-distillation) | – |
 | `09_compare_all` | original DA3 vs every enhancement, from the saved result records | None (CPU) |
@@ -94,24 +94,40 @@ its records go into `experiments/results/` and appear in 09 like the Kaggle ones
 
 1. **Push the repo**, then on colab.research.google.com: **File → Upload notebook** →
    `notebooks/05_self_audit_colab.ipynb`.
-2. **Runtime → Change runtime type → T4 GPU.** Private repo: **key icon (Secrets)** →
-   `GITHUB_TOKEN`, with **Notebook access** on.
+2. **Runtime → Change runtime type** (you switch it by hand):
+   - for `PHASE = "all"` / `"infer"`, the first GPU that connects, cheapest first:
+     **T4 → L4 → A100 → G4**. Measured rates in March 2026 were about 1.2 / 1.7 / 5.4 / 8.7 compute
+     units per hour; the real rate is under **Resources**. If one does not connect within a few
+     minutes, pick the next. The first cell runs a small fp16 attention test on the GPU, so an
+     unsupported GPU fails in seconds, not after the downloads;
+   - **CPU** for `PHASE = "analyse"`;
+   - not the TPUs (the code needs CUDA). H100 needs a higher Colab plan.
+
+   Private repo: **key icon (Secrets)** → `GITHUB_TOKEN`, with **Notebook access** on.
 3. **Runtime → Run all**, and allow Google Drive access. After each model, the notebook copies the
    summary, figures and records to `DRIVE_DIR` (default `MyDrive/DA3/self_audit_colab`). The last
    cell saves `self_audit_results.zip` there.
 4. **Same order as on Kaggle:**
    - first the quick check (`MAX_SCENES = 2`, the default);
    - then `MAX_SCENES = 0`, **one model per session** (`["da3-small"]`, then `["da3-base"]`).
-5. **Free Colab limits:**
-   - About 12 GB of RAM and 2 CPU cores. The TSDF scoring runs on the CPU and is slower than on
-     Kaggle; `FUSION_WORKERS = 2` keeps it within RAM.
-   - Sessions disconnect when idle or after a few hours. For a full run, split it:
-     1. `PHASE = "infer"` with `KEEP_DUMP_ON_DRIVE = True`. This is the GPU part; the exports and
-        dumps (several GB) are saved to Drive.
-     2. A new session with `PHASE = "analyse"` and `RESUME_FROM_DRIVE = True`. It downloads the
-        benchmark data again and continues from the saved dump.
-6. **Don't mix GPU types** in one comparison: run everything you compare on a T4, on Kaggle or on
-   Colab. The pose and reconstruction metrics don't depend on the platform, but timings do.
+5. **Colab limits and compute units:**
+   - The TSDF scoring runs on the CPU. `FUSION_WORKERS` is set from the runtime's cores and RAM
+     (~6 GB each, at most 8). That gives 2 on a standard runtime (~12 GB RAM, 2 cores) and more
+     on the bigger GPU runtimes. The worker count does not change the scores.
+   - Compute units are charged for every hour the runtime is **connected**, even when it is idle:
+     when a run ends, **Runtime → Disconnect and delete runtime**.
+   - Full runs, one model per session, in one of two ways:
+     - **Fastest:** `PHASE = "all"`. The model and all the scoring run in one session.
+     - **Fewer units, or if the session may be cut:**
+       1. GPU runtime, `PHASE = "infer"` with `KEEP_DUMP_ON_DRIVE = True`. Only the model runs;
+          the exports and dumps (several GB, check the free Drive space) are saved to Drive.
+       2. CPU runtime, `PHASE = "analyse"` and `RESUME_FROM_DRIVE = True`. It downloads the
+          benchmark data again and does all the scoring (original DA3 and Self-Audit) from the
+          saved dump.
+6. **GPU type and results.** The Self-Audit variants and the original DA3 come from the same model
+   run, so the GPU type cannot favour either side. Across runs the GPU type changes only rounding
+   (fp16 autocast on every GPU, fixed in `bench_adapter.py`); timings do depend on it, so note the
+   GPU the first cell prints for each run.
 
 ## 3. Run `06_foveated`
 
