@@ -15,6 +15,10 @@ reproduces the released API's pre/post-processing with our modules:
 Optional `dumper`: a callable run after each UNPOSED prediction, with access to the raw network
 outputs (e.g. the Self-Audit dump, da3.enhancements.self_audit.AuditDumper). It never changes the
 exported results; without a dumper the adapter behaves exactly as before.
+
+Optional `skip_existing` (resume after an interrupted run): a scene whose export (and dump, when a
+dumper is set) already exists and loads is not run again; its saved prediction is returned. Exports
+are written atomically (temporary file, then rename), so a saved file is always complete.
 """
 
 from __future__ import annotations
@@ -31,9 +35,27 @@ from da3.io_utils import load_views, scale_intrinsics, to_model_input
 from da3.model import DA3
 
 
+def savez_atomic(path: str, **arrays) -> None:
+    """np.savez_compressed to a temporary file, then rename: readers never see a partial file."""
+    tmp = path[:-4] + ".partial.npz"
+    np.savez_compressed(tmp, **arrays)
+    os.replace(tmp, path)
+
+
+def _loads(path: str) -> dict | None:
+    """All arrays of an .npz, or None if it is missing or unreadable (e.g. a truncated copy)."""
+    if not os.path.exists(path):
+        return None
+    try:
+        with np.load(path) as z:
+            return {k: z[k] for k in z.files}
+    except Exception:
+        return None
+
+
 class OursAsOfficialAPI:
     def __init__(self, model: DA3, device: str | torch.device = "cuda", use_ray_pose: bool = False,
-                 process_res: int = 504, amp: bool = True, dumper=None):
+                 process_res: int = 504, amp: bool = True, dumper=None, skip_existing: bool = False):
         self.model = model.eval().to(device)
         self.device = torch.device(device)
         self.use_ray_pose = use_ray_pose
@@ -41,7 +63,18 @@ class OursAsOfficialAPI:
         self.amp = amp and self.device.type == "cuda"
         self.timings = []
         self.dumper = dumper
+        self.skip_existing = skip_existing
+        self.skipped = 0
         self._last = None  # raw outputs of the last prediction, kept only when a dumper is set
+
+    def _existing(self, image_files, export_dir: str, posed: bool) -> dict | None:
+        res = _loads(os.path.join(export_dir, "exports", "mini_npz", "results.npz"))
+        if res is None or not {"depth", "conf", "extrinsics", "intrinsics"} <= set(res):
+            return None
+        if self.dumper is not None and not posed and \
+                _loads(os.path.join(export_dir, "exports", "audit_dump.npz")) is None:
+            return None
+        return {**res, "images": load_views(image_files, self.process_res)[0]}
 
     @torch.no_grad()
     def predict(self, image_files, extrinsics=None, intrinsics=None, ref_view_strategy="first"):
@@ -86,12 +119,17 @@ class OursAsOfficialAPI:
     # -- the method the benchmark harness calls
     def inference(self, image, extrinsics=None, intrinsics=None, export_dir=None,
                   export_format="mini_npz", ref_view_strategy="first", **_):
+        if self.skip_existing and export_dir is not None:
+            pred = self._existing(image, export_dir, posed=extrinsics is not None)
+            if pred is not None:
+                self.skipped += 1
+                return pred
         pred = self.predict(image, extrinsics, intrinsics, ref_view_strategy)
         if export_dir is not None:
             path = os.path.join(export_dir, "exports", "mini_npz", "results.npz")
             os.makedirs(os.path.dirname(path), exist_ok=True)
-            np.savez_compressed(path, depth=np.round(pred["depth"], 8), conf=np.round(pred["conf"], 2),
-                                extrinsics=pred["extrinsics"], intrinsics=pred["intrinsics"])
+            savez_atomic(path, depth=np.round(pred["depth"], 8), conf=np.round(pred["conf"], 2),
+                         extrinsics=pred["extrinsics"], intrinsics=pred["intrinsics"])
             if self._last is not None:
                 self.dumper(self, self._last["x"], self._last["out"], export_dir, self._last["ref"])
         self._last = None

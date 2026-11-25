@@ -103,5 +103,7 @@ class AuditDumper:
 
         path = os.path.join(export_dir, "exports", "audit_dump.npz")
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        np.savez_compressed(path, **dump)
+        tmp = path[:-4] + ".partial.npz"  # atomic: a resumed run never reads a half-written dump
+        np.savez_compressed(tmp, **dump)
+        os.replace(tmp, path)
         return path
