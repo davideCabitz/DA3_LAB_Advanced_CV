@@ -1,0 +1,128 @@
+# Pre-registered statistical analysis plan, LoRA platform / enhancement #3 (E3, pose-conditioned
+# self-distillation) vs the released DA3.
+# Fixed on 2026-11-25, BEFORE any LoRA training run or any LoRA result exists (the git history is the
+# timestamp). The analysis code must read this file and store its SHA-256 in every result record,
+# so a later change of the plan is visible. Reasons for every choice: docs/LORA_ANALYSIS_PLAN.md.
+# Do NOT edit after results are seen; a changed plan = a new version + an entry in the deviations log.
+version: 1
+
+# ----------------------------------------------------------------------------- arms and runs
+models:
+  primary: da3-small             # all confirmatory decisions
+  replication: da3-base          # descriptive only (E3 + pose_only, 2 seeds), if the budget allows
+reference_arm: released          # released weights, LoRA absent (bit-identical to LoRA off)
+arms:                            # every arm: same data, steps, rank, seeds, evaluation
+  e3: {teacher: posed_da3, losses: [depth, grad, ray, point, cam], anchor: true}
+  pose_only: {teacher: none, losses: [ray, cam], anchor: true}
+  own_output: {teacher: unposed_da3_frozen, losses: [depth, grad, ray, point, cam], anchor: true}
+  free_geometry: {optional: true}   # published test-time LoRA (2604.14048); descriptive only
+seeds: [0, 1, 2]                 # training seeds; >= 2 required for any decision, 3 planned
+min_seeds: 2
+
+# ----------------------------------------------------------------------------- frozen training recipe
+# (tuning allowed only on the KITTI validation drives, before the test drives are evaluated once)
+lora:
+  rank: 16
+  alpha: 16
+  dropout: 0.0
+  blocks: [4, 5, 6, 7, 8, 9, 10, 11]
+  targets: [attn.qkv, attn.proj, mlp.fc1, mlp.fc2]
+  frozen: [backbone.blocks.0-3, cam_enc, head, cam_head, camera_token, pos_embed]
+train:
+  steps: 2000
+  lr: 2.0e-4
+  warmup: 100
+  min_lr_ratio: 0.01
+  weight_decay: 0.0
+  grad_clip: 1.0
+  amp: fp16
+  views: 8
+  resolution: [280, 504]         # [H, W]; KITTI image_02 centre-cropped to 1.8:1
+  ref_strategy: first            # student reference = view 0 = teacher reference (gauge)
+  teacher_conf_percentile: 30    # teacher pixels below this per-clip confidence percentile are ignored
+  max_depth_m: 80.0
+  scale_align: per_clip_median   # detached s* = median(D_hat / D_target) on valid pixels
+  anchor_weight: 0.1
+  anchor_data: tartanair_subset  # replay set outside KITTI and outside every test set
+
+# ----------------------------------------------------------------------------- KITTI split (drive level)
+kitti:
+  test_pool: eigen_test_drives   # drives of the Eigen et al. (2014) test file list
+  n_test_drives: 12              # drawn from the pool with split_seed, stratified by category
+  n_val_drives: 3                # not in the Eigen test list; hyper-parameter checks only
+  train_drives: not_eigen_test   # every other downloaded drive outside the Eigen test list
+  split_seed: 0
+  clips_per_drive: 10            # evenly spaced, non-overlapping clips of `views` frames
+  clip_stride_frames: 3
+  depth_gt: raw_lidar            # velodyne projected to image_02; "annotated" GT = secondary if present
+  depth_range_m: [0.001, 80.0]
+  camera_source: head            # D_C (API default) for every arm; ray solver = sensitivity only
+
+# ----------------------------------------------------------------------------- statistics
+unit: scene                      # Sec. 6 scene; KITTI drive; monocular image set per scene
+ci_level: 0.95                   # two-sided; a bound = one-sided test at 2.5%
+alpha_one_sided: 0.025
+bootstrap:
+  n: 10000
+  seed: 0
+  method: percentile             # cluster (scene/drive) bootstrap; stratified by dataset when pooled
+permutation:
+  test: sign_flip                # paired; statistic = the estimand itself (mean or weighted mean)
+  exact_max_n: 16                # exact enumeration up to 2^16 sign patterns, else Monte Carlo
+  monte_carlo_n: 100000
+  seed: 0
+wilcoxon: report_only            # signed-rank p-value reported, never decides
+seed_aggregation: mean_over_seeds_per_unit   # d_j = mean_s(B_sj) - A_j; spread across seeds reported
+
+# ----------------------------------------------------------------------------- hypotheses
+primary:
+  id: H1
+  arm: e3
+  endpoint: kitti_absrel_clipscale   # AbsRel vs LiDAR, one median scale per clip, test drives
+  estimand: ratio_of_means           # mean_j(B_j) / mean_j(A_j) over test drives
+  type: superiority
+  equivalence_margin: 0.03           # |ratio - 1| <= 3% -> "no meaningful effect" (null)
+
+secondary_holm:                      # tested confirmatorily only if H1 PASSes (gatekeeping)
+  - {id: S1, arm: e3, endpoint: kitti_ate, estimand: ratio_of_means, type: superiority}
+  - {id: S2, arm: e3, endpoint: kitti_rpe_trans, estimand: ratio_of_means, type: superiority}
+  - {id: S3, arm: e3, endpoint: kitti_rpe_rot, estimand: ratio_of_means, type: superiority}
+  - {id: S4, arm: e3, vs: pose_only, endpoint: kitti_absrel_clipscale, estimand: ratio_of_means, type: superiority}
+  - {id: S5, arm: e3, vs: own_output, endpoint: kitti_absrel_clipscale, estimand: ratio_of_means, type: superiority}
+
+non_inferiority:                     # intersection-union test: "no regression" iff ALL components PASS
+  arm: e3
+  pooling: equal_dataset_weights     # mean over datasets of the per-dataset mean paired difference
+  components:
+    - {id: N1, benchmark: sec6, metric: auc03, datasets: [hiroom, eth3d, dtu, 7scenes, scannetpp], margin_abs: 1.0}
+    - {id: N2, benchmark: sec6, metric: auc30, datasets: [hiroom, eth3d, dtu, 7scenes, scannetpp], margin_abs: 1.0}
+    - {id: N3, benchmark: sec6, metric: fscore, mode: recon_unposed, datasets: [hiroom, eth3d, 7scenes, scannetpp], margin_abs: 1.0}
+    - {id: N4, benchmark: sec6, metric: chamfer, mode: recon_unposed, datasets: [dtu], margin_rel: 0.03}
+    - {id: N5, benchmark: mono, metric: delta1, datasets: mono_datasets, margin_abs: 0.5}
+    - {id: N6, benchmark: mono, metric: absrel, datasets: mono_datasets, margin_rel: 0.03}
+  dataset_unavailable: component_reported_as_not_evaluated   # never imputed; claim restricted to what ran
+
+# Monocular datasets for N5/N6. Must be final before any LoRA result is seen; changing it later is a
+# deviation. eth3d = DA3-BENCH ETH3D images with src/da3/eval/gt_depth.py (no new download).
+mono_datasets: [eth3d]
+mono_alignment: least_squares_scale_shift_depth   # DA3 Tab. 4 does not state it; DA2 uses disparity
+mono_alignment_sensitivity: least_squares_scale_shift_disparity
+
+descriptive:                         # CIs and p-values, no decision
+  - per_dataset_sec6                 # Holm-adjusted p across datasets, per metric
+  - sec6_recon_posed
+  - kitti_absrel_imagescale
+  - kitti_delta1
+  - kitti_pose_auc
+  - kitti_ray_camera_source
+  - tab4_kitti_eigen                 # in-domain for the LoRA, never part of the no-regression claim
+  - replication_da3_base
+  - free_geometry
+  - seed_spread
+
+aa_checks:
+  lora_off_bit_identical: required   # exports with LoRA disabled == released exports (byte-equal npz arrays)
+  eval_repeat_released: hiroom       # released model evaluated twice (two sessions): nondeterminism floor
+  eval_repeat_flag_abs: 0.1          # flag if any metric differs by more than 0.1 point between repeats
+
+nvs: not_evaluated                   # no GS-DPT head / 3DGS pipeline in the repository

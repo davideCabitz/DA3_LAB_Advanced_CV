@@ -83,6 +83,8 @@ see [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md) §4–5.
 - [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md): multi-agent enhancement study on a frozen DA3 (35 ideas, clusters and impact, novelty check with references; top 3 = Self-Audit, Foveated DA3, pose-conditioned self-distillation; interactions and implementation order).
 - [docs/ENHANCEMENTS_RUNBOOK.md](docs/ENHANCEMENTS_RUNBOOK.md): how to run the enhancement notebooks (05_self_audit, 06_foveated, 09_compare_all), save the result records, and the record contract every enhancement follows.
 - [docs/FOVEATED_ANALYSIS_PLAN.md](docs/FOVEATED_ANALYSIS_PLAN.md): pre-registered statistical analysis plan of enhancement #2 (constants in `configs/foveated_analysis.yaml`; do not edit after results; deviations are logged there).
+- [docs/LORA.md](docs/LORA.md): LoRA platform / enhancement #3 (E3): repository status, expected results, alternatives, how the LoRA works inside DA3, Phase 5 (same photos incl. the fountain set, Blender side by side), open decisions.
+- [docs/LORA_ANALYSIS_PLAN.md](docs/LORA_ANALYSIS_PLAN.md): pre-registered statistics of the LoRA vs the released DA3 (constants in `configs/lora_analysis.yaml`; do not edit after results).
 - [TODO.md](TODO.md): running task list for the phases.
 - `src/da3/`: our implementation (installable with `pip install -e .`).
   - `backbone/`: DINOv2 ViT with within-view / cross-view token reordering, RoPE, QK-norm, camera tokens.
@@ -95,11 +97,13 @@ see [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md) §4–5.
   - `export/`: PLY, transforms.json (NeRF/COLMAP style), GLB.
   - `compare/`: standard result record (`experiments/results/<enhancement>/<tag>.json`, schema `da3-result/1`), comparison tables (differences to the original DA3, only within one protocol: same weights, datasets, scenes, frame sampling) and plots.
   - `enhancements/`: one sub-package per enhancement of the frozen DA3; `self_audit/` = enhancement #1 (signals, audit model, pose-source choice/fusion, triple-collocation calibration, dump hook for the benchmark adapter); `foveated/` = enhancement #2 (mixed per-view resolution routing, bit-identical to DA3 at equal resolution, attention-mass balancing, focus selection / token budgets, harness adapter, virtual zoom cameras).
+  - `lora.py`: switchable LoRA (inserted by name into backbone blocks 4-11, off = bit-identical, merge/unmerge, adapter-only files tied to the base weights' SHA-256).
+  - `data/kitti.py` (KITTI raw calib / OXTS poses / LiDAR depth, Eigen-test leakage guard, drive split) and `eval/clip_metrics.py` (clip-scale AbsRel, ATE / RPE).
   - `model.py`: full DA3 network; `config.py`: model/train configs.
 - `configs/`: YAML configs (model size, resolution, views, pose conditioning, training).
 - `scripts/`: entry points (train, eval, infer, parity, checkpoint conversion, Blender import, Blender turntable video).
 - `tests/`: pytest unit tests (`pytest -q`).
-- `notebooks/`: thin Kaggle notebooks (00_setup, 01_parity, 02_train, 03_eval, 04_demo_export (+ 04_demo_export_colab: the same demo on Google Colab), 05_self_audit (+ 05_self_audit_colab), 06_foveated, 09_compare_all; 07 reserved for enhancement #3); all logic stays in `src/` and `scripts/`.
+- `notebooks/`: thin Kaggle notebooks (00_setup, 01_parity, 02_train, 03_eval, 04_demo_export (+ 04_demo_export_colab: the same demo on Google Colab), 05_self_audit (+ 05_self_audit_colab), 06_foveated, 07_lora (enhancement #3: LoRA platform check, KITTI go/no-go, fountain reference), 09_compare_all); all logic stays in `src/` and `scripts/`.
 - `experiments/`: experiment registry (config, seed, commit, metrics per run); `experiments/results/` holds the standard result records (copied from the Kaggle outputs and committed by the user).
 - `reports/`: write-ups (baseline.md, enhancement_1_self_audit.md, enhancement_2_foveated.md).
 

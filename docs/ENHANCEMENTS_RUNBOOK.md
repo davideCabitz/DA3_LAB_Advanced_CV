@@ -9,7 +9,7 @@ enhancements. The enhancements, their novelty check and the plan are in
 | `05_self_audit` | Enhancement #1, DA3 Self-Audit: original DA3 vs DA3 + Self-Audit | GPU (one pass per model), the rest CPU |
 | `05_self_audit_colab` | the same, on Google Colab (§2b) | Colab GPU (T4 → L4 → A100 → G4) |
 | `06_foveated` | Enhancement #2, Foveated DA3: mixed per-view resolutions in one pass (view level + region zoom) | GPU; region zoom in its own session |
-| `07_…` | reserved for enhancement #3 (pose-conditioned self-distillation) | – |
+| `07_lora` | Enhancement #3 platform, part 0: LoRA checks on the GPU, KITTI conversion, E3 go/no-go, fountain reference (§3b) | GPU |
 | `09_compare_all` | original DA3 vs every enhancement, from the saved result records | None (CPU) |
 
 ## 1. How results are stored (the contract every enhancement follows)
@@ -182,6 +182,19 @@ Gates (printed and in `gates.json`):
 - G1 uniform-resolution curve (G1a headroom, G1b context informative);
 - G3 cross-scale probe: primary, then secondary, robustness and the rescue, each labelled;
 - G2 region zoom: oracle (primary), random and texture (secondary).
+
+## 3b. Run `07_lora` (part 0: platform check + E3 go/no-go)
+
+Plan: [LORA.md](LORA.md); statistics: [LORA_ANALYSIS_PLAN.md](LORA_ANALYSIS_PLAN.md). No training yet.
+1. **Inputs (private Kaggle datasets):** KITTI raw, for each drive the *synced+rectified* zip and the
+   `<date>_calib.zip` of its date (Kaggle unpacks them). For the go/no-go use **2 drives that are not
+   in the Eigen test list**; they become validation drives. Optionally the fountain photos.
+2. **Settings:** Accelerator = GPU (T4 / P100), Internet = on. In the configuration cell set
+   `KITTI_RAW` and `FOUNTAIN` with *Copy path* from the Input panel.
+3. **Save Version → Save & Run All.** Parts: A platform check (stops with an error if LoRA off is not
+   bit-identical to the released model), B conversion + `split.json`, C go/no-go, D fountain reference.
+4. **Send** `lora/lora_check.json` (measured memory per configuration) and `lora/gonogo_<model>.md`.
+   GO = the pose-conditioned DA3 has ≥ 5% lower AbsRel; NO-GO stops E3 (the platform stays).
 
 ## 4. Save the results (needed for 09)
 

@@ -1,4 +1,4 @@
-"""Generate the thin Kaggle notebooks (00_setup ... 04_demo_export, 05_self_audit, 06_foveated,
+"""Generate the thin Kaggle notebooks (00_setup ... 04_demo_export, 05_self_audit, 06_foveated, 07_lora,
 09_compare_all) from the cell lists below.
 
 All logic lives in src/ and scripts/; notebooks only clone the repo, install pinned deps, attach
@@ -958,6 +958,107 @@ display(Markdown(open(f"{OUT}/summary.md").read()))'''),
         md("### 6 · Save: download `foveated_results.zip`, copy `foveated/results/*` into the repo's `experiments/results/`, commit"),
         code('''!cd /kaggle/working && rm -f foveated_results.zip && zip -qr foveated_results.zip foveated && ls -la foveated_results.zip
 !find {RESULTS} -name "*.json" | sort'''),
+    ],
+    "07_lora": [
+        md("""# 07 · Enhancement 3: LoRA platform + E3 go/no-go (part 0)
+Part 0 of the LoRA work (`docs/LORA.md`, statistics pre-registered in `docs/LORA_ANALYSIS_PLAN.md`).
+**No training happens in this notebook yet.** It checks that everything the training will rely on
+works, and answers the go/no-go question of E3 before any LoRA is trained:
+
+| Part | What | Needs | Time (T4) |
+|---|---|---|---|
+| A · platform check | unit tests; with the **released** weights on the GPU: LoRA off = bit-identical, B = 0 = bit-identical; measured memory / time of one LoRA training step (replaces the estimates in docs/LORA.md) | nothing | ~10 min |
+| B · KITTI conversion | raw drives -> canonical format, LiDAR depth (evaluation only), pre-registered drive split with the Eigen-test leakage guard | your KITTI dataset | ~5 min / drive |
+| C · go/no-go | released DA3 unposed vs conditioned on the OXTS poses, same clips: **GO if the posed depth is ≥ 5% better** (AbsRel vs LiDAR) | B | ~10 min |
+| D · fountain reference | released-model reconstruction of your fountain photos: the "step 0" every later LoRA reconstruction is compared with | your photos | ~5 min |
+
+Settings: **Accelerator = GPU (T4 / P100)**, **Internet = on** (clone, weights, Eigen list).
+
+**Your inputs** (right panel > Add Input > Your Datasets):
+* KITTI raw, uploaded as a private dataset: for each drive the *synced+rectified* zip
+  (`<date>_drive_XXXX_sync.zip`: image_02, oxts, velodyne_points) **and** the calibration zip of its
+  date (`<date>_calib.zip`). Kaggle unpacks the zips; the converter finds the folders itself.
+  For part C use **2 drives that are NOT in the Eigen test list** (they become validation drives;
+  test drives are never looked at before a LoRA exists).
+* The fountain photos (a folder of images of one scene).
+
+Outputs in `/kaggle/working/lora/` (zipped as `lora_part0.zip`): `lora_check.json`, `kitti/split.json`,
+`gonogo_<model>.json/.md`, `fountain/released_<model>/` (reconstruction + Blender package).
+**Send me** `lora_check.json` and `gonogo_<model>.md`."""),
+        code(SETUP),
+        code('''import torch
+assert torch.cuda.is_available(), "No GPU: right panel > Settings > Accelerator > GPU T4 (or P100), then run all again."
+if True:
+''' + _GPU_SMOKE),
+        code('''# Open3D (TSDF meshing of the fountain) + self-test; without a working TSDF the fountain uses depth-grid meshing
+import sys, json
+if sys.version_info[:2] <= (3, 12):
+    !pip install -q "open3d==0.19.0"
+else:
+    !pip install -q "open3d>=0.19.0"
+!python scripts/check_open3d.py --out /kaggle/working/open3d_check.json
+try:
+    MESH = "tsdf" if json.load(open("/kaggle/working/open3d_check.json"))["legacy_tsdf_ok"] else "depth"
+except Exception:
+    MESH = "depth"
+print("fountain mesh:", MESH)'''),
+        md("### Configuration"),
+        code('''PRESET = "da3-small"     # primary model of the pre-registered plan; "da3-base" = replication
+KITTI_RAW = ""           # Copy path from the Input panel, e.g. "/kaggle/input/kitti-raw"; "" = skip parts B, C
+FOUNTAIN = ""            # folder with the fountain photos, e.g. "/kaggle/input/my-photos/multiview/fountain"; "" = skip D
+RUN = {"check": True, "kitti": True, "gonogo": True, "fountain": True}
+EIGEN_URL = "https://raw.githubusercontent.com/nianticlabs/monodepth2/master/splits/eigen/test_files.txt"
+OUT = "/kaggle/working/lora"
+CANON = "/tmp/canonical/kitti"            # converted drives (large, not saved)
+import os
+os.makedirs(OUT, exist_ok=True)
+if not KITTI_RAW:
+    print("KITTI_RAW is empty: parts B and C are skipped")
+if not FOUNTAIN:
+    print("FOUNTAIN is empty: part D is skipped")'''),
+        md("### A · Platform check (unit tests + released weights on the GPU)"),
+        code('''if RUN["check"]:
+    !python -m pytest -q tests/test_lora.py tests/test_kitti.py 2>&1 | tail -n 3
+    !python scripts/lora_check.py --presets {PRESET} --out {OUT}/lora_check.json
+    chk = json.load(open(f"{OUT}/lora_check.json"))
+    for p, r in chk["bit"].items():
+        print(p, "| deterministic repeat:", r["deterministic"], "| LoRA off / B=0 bit-identical:", r["pass"],
+              "| trainable LoRA params:", r["lora_params"])
+    for k, r in chk["probe"].items():
+        print(f"{k:28s}", f"peak {r['peak_gb']:.2f} GB, {r['s_per_step']:.2f} s/step" if r["ok"] else "OUT OF MEMORY")'''),
+        md("### B · KITTI raw -> canonical format + drive split"),
+        code('''if RUN["kitti"] and KITTI_RAW:
+    import urllib.request
+    urllib.request.urlretrieve(EIGEN_URL, "/tmp/eigen_test_files.txt")
+    !python scripts/prepare_kitti.py --raw {KITTI_RAW} --out {CANON} --eigen-test-list /tmp/eigen_test_files.txt
+    !mkdir -p {OUT}/kitti && cp {CANON}/split.json {OUT}/kitti/split.json
+    split = json.load(open(f"{CANON}/split.json"))
+    print("validation drives (used by part C):", split["val"])
+    print("test drives (NOT used here):", split["test"], "| training drives:", split["train"])'''),
+        md("""### C · Go/no-go: does the pose-conditioned DA3 (E3's teacher) give better depth than the unposed one?
+Same clips for both: 8 frames (every 3rd), 10 clips per drive, 1.8:1 centre crop at 504x280, depth
+vs LiDAR with one median scale per clip, cameras from the camera head. With only 2 drives the
+numbers are descriptive (no CI); the rule is the report's: **GO if posed / unposed AbsRel ≤ 0.95**.
+If only the trajectory errors (ATE / RPE) improve, E3 would reduce to ordinary pose-supervised
+fine-tuning (report §4.4)."""),
+        code('''if RUN["gonogo"] and KITTI_RAW:
+    !python scripts/kitti_eval.py --root {CANON} --drives val --arms released posed --preset {PRESET} \\
+        --out {OUT}/gonogo_{PRESET}.json
+    from IPython.display import Markdown, display
+    display(Markdown(open(f"{OUT}/gonogo_{PRESET}.md").read()))'''),
+        md("""### D · Fountain: reference reconstruction with the released weights
+The same photos, frame order, resolution (504) and settings will later be reconstructed with every
+LoRA (arms, seeds, training snapshots) and rendered side by side. The fountain has no ground truth,
+so it shows how the reconstruction *changes*, never whether it is better."""),
+        code('''if RUN["fountain"] and FOUNTAIN:
+    FOUT = f"{OUT}/fountain/released_{PRESET}"
+    !python scripts/infer.py --images {FOUNTAIN} --out {FOUT} --weights official:{PRESET} --mesh {MESH}
+    !python scripts/render_preview.py {FOUT}
+    from IPython.display import Image, display
+    display(Image(f"{FOUT}/preview.png", width=1000)); display(Image(f"{FOUT}/preview_3d.png", width=1000))'''),
+        md("### Save: download `lora_part0.zip` (Output panel) and send me `lora_check.json` + `gonogo_<model>.md`"),
+        code('''!cd /kaggle/working && rm -f lora_part0.zip && zip -qr lora_part0.zip lora && ls -la lora_part0.zip
+!find {OUT} -maxdepth 2 -name "*.json" -o -maxdepth 2 -name "*.md" | sort'''),
     ],
     "09_compare_all": [
         md("""# 09 · Original DA3 vs all enhancements
