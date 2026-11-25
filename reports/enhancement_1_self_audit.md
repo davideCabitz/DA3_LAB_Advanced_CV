@@ -1,10 +1,12 @@
 # Enhancement 1: DA3 Self-Audit, original DA3 vs DA3 + Self-Audit
 
-**Status (2026-11-22): implemented, not yet run.**
+**Status (2026-11-25): smoke test done, full run pending.**
 - Method, setup and claims below are final.
-- The result sections (§4) are filled from the Kaggle run of `notebooks/05_self_audit`, setting
-  **[official]** (released DA3-Small / DA3-Base weights run by us).
-- Until then every number in this file is a placeholder (–).
+- A limited end-to-end run on Kaggle (`MAX_SCENES = 2`, DA3-Small) completed: every step ran, including
+  the reconstruction scores. Its numbers are in §4.0, labelled as a smoke test: 2 scenes per dataset
+  are too few for any conclusion, so the gates are **not** decided from it.
+- The result sections §4.1–4.4 are filled from the full run (`MAX_SCENES = 0`, DA3-Small then
+  DA3-Base), setting **[official]**. Until then they hold placeholders (–).
 
 Origin of the idea: rank 1 of the multi-agent study,
 [docs/da3_enhancement_report.md](../docs/da3_enhancement_report.md) §4.2 (merges ideas A2, C1, F3
@@ -62,6 +64,47 @@ The three comparisons, each against what the original DA3 offers:
 - **G4:** the E_c residual raises the audit AUROC by ≥ 0.03.
 
 ## 4. Results [official]
+
+### 4.0 Smoke test (limited run, not reportable)
+Kaggle, notebook `05_self_audit`, 2026-11-25, commit `e8676fd`; DA3-Small, 2 scenes each of HiRoom,
+7Scenes, DTU-64 (≤ 100 frames); tag `sa_da3-small_hiroom-7scenes-dtu64_limited2`. Records in
+`experiments/results/{baseline,self_audit}/`, summary and figures in
+[figures/self_audit/limited2/](figures/self_audit/limited2/summary.md).
+
+**What it shows about the pipeline (this is its purpose):**
+- the GPU run, the dump, the leave-one-dataset-out audit, the harness replays of the pose variants
+  and the TSDF / F1 scoring all ran end to end (F1 present for HiRoom and 7Scenes; DTU-64 counts for
+  pose only, as planned);
+- the numbers are in the range of the paper for DA3-Small [paper, Tab. 2: HiRoom 9.5 / 75.2,
+  DTU 30.6 / 91.2, 7Scenes 14.0 / 78.7 AUC@3 / AUC@30]: ours on 2 scenes are HiRoom 3.9 / 70.3,
+  DTU-64 40.7 / 93.1, 7Scenes 29.3 / 88.3. With 2 scenes the gaps are within scene-to-scene variation;
+  DTU-64 is a subset of DTU. The full run decides.
+
+**Sec. 6, pose source (only the cameras differ; depth identical):**
+
+| Variant | 7Scenes AUC@3 / @30 / F1 | DTU-64 AUC@3 / @30 | HiRoom AUC@3 / @30 / F1 |
+|---|---|---|---|
+| camera head (original, API default) | 29.3 / 88.3 / 50.9 | 40.7 / 93.1 | 3.9 / 70.3 / 9.4 |
+| ray map, official RANSAC (original option) | 32.4 / 89.2 / 53.8 | 33.2 / 91.9 | 3.6 / 70.5 / 17.4 |
+| ray map, our DLT | 22.6 / 87.1 / – | 1.9 / 79.6 | 1.0 / 60.9 / – |
+| Self-Audit per-view choice | 29.4 / 88.3 / 50.3 | 35.1 / 92.1 | 2.8 / 67.2 / 11.3 |
+| Self-Audit per-view fusion | 31.6 / 88.9 / 53.5 | 38.1 / 92.8 | 3.9 / 69.3 / 8.5 |
+| oracle choice (uses GT, upper bound) | 33.9 / 89.5 / – | 43.3 / 93.4 | 3.7 / 72.8 / – |
+
+**Observations to verify in the full run (not conclusions):**
+- **Our DLT ray solver is much worse than the official RANSAC solver** (DTU-64 AUC@3 1.9 vs 33.2). The
+  report expected a 0.3–0.6° difference; this is far larger, so the DLT poses should not be used for
+  any headline number, and the cause (no confidence weighting / no outlier rejection in Eq. 2) is worth
+  a note in the baseline report.
+- The oracle beats the best single source by +1.5 (7Scenes) and +2.6 (DTU-64) AUC@3: there is some
+  headroom in choosing the pose source per view, but the audit's choice does not capture it yet
+  (it is fitted on very few views here).
+- Failure detection (A): on the pooled views the audit's AUROC(>15°) is 0.986 vs 0.948 for DA3's
+  confidence, but only HiRoom has gross failures (1 of the 3 datasets), so G1 is "n.a." in this run.
+- Depth uncertainty (C): triple collocation gives 90% coverage 0.93 (HiRoom) / 0.72 (7Scenes) without GT,
+  vs 0.997 / 0.82 for the GT-calibrated confidence; G3 = 62% of bins within [0.7, 1.4] (needs ≥ 75%).
+- Gates on this run (informative only): G1 n.a., G2 FAIL, G3 FAIL, G4 FAIL (the E_c residual adds
+  +0.003 AUROC, criterion +0.03).
 
 _Pending the Kaggle run. Fill from `self_audit/<tag>/summary.md`; the records are in
 `experiments/results/`._

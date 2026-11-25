@@ -105,7 +105,7 @@ see [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md) §4–5.
 - `tests/`: pytest unit tests (`pytest -q`).
 - `notebooks/`: thin Kaggle notebooks (00_setup, 01_parity, 02_train, 03_eval, 04_demo_export (+ 04_demo_export_colab: the same demo on Google Colab), 05_self_audit (+ 05_self_audit_colab), 06_foveated, 07_lora (+ 07_lora_colab, Drive checkpoints; enhancement #3, parts A-I: checks, KITTI, go/no-go, training, KITTI test, Sec. 6, fountain comparison, analysis), 09_compare_all); all logic stays in `src/` and `scripts/`.
 - `experiments/`: experiment registry (config, seed, commit, metrics per run); `experiments/results/` holds the standard result records (copied from the Kaggle outputs and committed by the user).
-- `reports/`: write-ups (baseline.md, enhancement_1_self_audit.md, enhancement_2_foveated.md).
+- `reports/`: write-ups (baseline.md, enhancement_1_self_audit.md, enhancement_2_foveated.md, enhancement_3_lora.md).
 
 Setting tags for every reported number: **[paper]**, **[official]** (released weights run by us), **[reduced-scale]** (our training).
 

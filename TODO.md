@@ -28,7 +28,10 @@ Top 3 from the multi-agent study (docs/da3_enhancement_report.md §4–5). Run t
       notebook `05_self_audit`, tests `tests/test_self_audit.py` + `tests/test_compare.py`): failure detector, per-view
       head/ray pose choice + fusion, triple-collocation σ, E_c residual; the gate dump is part of this run
   - [!] `00_setup` on Kaggle: the new unit tests must pass (pytest runs all tests)
-  - [!] `05_self_audit` with `MAX_SCENES = 2` (end-to-end check), then `MAX_SCENES = 0`; share `summary.md` + gates
+  - [x] `05_self_audit` quick check (`MAX_SCENES = 2`, DA3-Small, 2026-11-25): end to end incl. F1; records in
+        `experiments/results/`, summary in reports §4.0 (smoke test, no gate decisions). Finding: our DLT ray
+        solver is far worse than the official RANSAC one (DTU-64 AUC@3 1.9 vs 33.2)
+  - [!] `05_self_audit` full run: `MAX_SCENES = 0`, one model per session (DA3-Small, then DA3-Base)
   - [ ] copy `self_audit/results/*` into `experiments/results/` and commit; fill reports/enhancement_1_self_audit.md
 - [~] #2 Foveated DA3 (training-free): implemented (`src/da3/enhancements/foveated/`, `scripts/foveated_eval.py`,
       `eval_bench.py --foveated / --process-res / --meter`, notebook `06_foveated`, tests `tests/test_foveated.py`):
@@ -47,9 +50,12 @@ Top 3 from the multi-agent study (docs/da3_enhancement_report.md §4–5). Run t
       `src/da3/lora.py`, `lora_train.py`, `lora_stats.py`, `data/kitti.py`; scripts `prepare_kitti.py`,
       `lora_check.py`, `kitti_eval.py`, `train_lora.py`, `lora_analysis.py`, `compare_reconstructions.py`;
       `--adapter` in `eval_bench.py` / `infer.py`; notebooks `07_lora` + `07_lora_colab` (parts A-I); tests
-  - [!] session 1 (Kaggle, KITTI raw mirror attached): parts A-F, H, I
-  - [!] session 2: part G (Sec. 6, split over Kaggle / Colab), then I again
-  - [ ] copy `lora/results/*` into `experiments/results/`; reports/enhancement_3_lora.md; Blender video
+  - [x] session 1 (Kaggle, 2026-11-25): A platform check passed (bit-identical, 0.57 s/step, 2 GB); B 25 drives
+        downloaded from KITTI; C go/no-go = **NO-GO** (posed depth ratio 0.995; cameras ~2x better):
+        reports/enhancement_3_lora.md §4.0-4.1
+  - [!] session 2: training anyway as a logged deviation (IGNORE_GONOGO = True), exploratory; then F, I
+  - [ ] session 3: part G (Sec. 6, split over Kaggle / Colab), then I again
+  - [ ] copy `lora/results/*` into `experiments/results/`; fill reports/enhancement_3_lora.md §4.2-4.5; fountain / photo set
 - [ ] "enhancement experiment" template (config + eval command)
 - [ ] VGGT / Pi3 / DA2 comparisons (not started)
 

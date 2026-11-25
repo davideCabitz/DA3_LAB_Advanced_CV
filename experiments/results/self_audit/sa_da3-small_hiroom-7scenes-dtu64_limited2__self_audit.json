@@ -1,0 +1,481 @@
+{
+  "schema": "da3-result/1",
+  "enhancement": "self_audit",
+  "variant": "audit_metrics",
+  "tag": "sa_da3-small_hiroom-7scenes-dtu64_limited2__self_audit",
+  "setting": "official",
+  "weights": "official:da3-small",
+  "protocol": {
+    "datasets": [
+      "7scenes",
+      "dtu64",
+      "hiroom"
+    ],
+    "scenes": [
+      "20241230/828738/cam_sampled_08",
+      "20241230/828744/cam_sampled_04",
+      "chess",
+      "fire",
+      "scan105",
+      "scan114"
+    ],
+    "max_frames": 100,
+    "modes": [
+      "pose",
+      "recon_unposed"
+    ],
+    "ref_view_strategy": "first"
+  },
+  "sec6": {},
+  "sec6_per_scene": {},
+  "extra": {
+    "failure_detection": {
+      "7Scenes \u00b7 DA3 confidence (original)": {
+        "views": 200,
+        "AUROC>15\u00b0": NaN,
+        "AUROC>5\u00b0": NaN,
+        "Spearman": -0.09163364392900564,
+        "AURC (deg)": 3.0504909188403655,
+        "gross failures": 0
+      },
+      "7Scenes \u00b7 Self-Audit": {
+        "views": 200,
+        "AUROC>15\u00b0": NaN,
+        "AUROC>5\u00b0": NaN,
+        "Spearman": -0.0005122633828812019,
+        "AURC (deg)": 3.1534072861848914
+      },
+      "7Scenes \u00b7 Self-Audit w/o E_c residual": {
+        "views": 200,
+        "AUROC>15\u00b0": NaN,
+        "AUROC>5\u00b0": NaN,
+        "Spearman": 0.3066267606243153,
+        "AURC (deg)": 2.6858699300775446
+      },
+      "7Scenes \u00b7 oracle (sorted by true error)": {
+        "views": 200,
+        "AURC (deg)": 2.1997770477795875
+      },
+      "DTU-64 \u00b7 DA3 confidence (original)": {
+        "views": 128,
+        "AUROC>15\u00b0": NaN,
+        "AUROC>5\u00b0": NaN,
+        "Spearman": 0.11992188897185573,
+        "AURC (deg)": 2.2313038435095427,
+        "gross failures": 0
+      },
+      "DTU-64 \u00b7 Self-Audit": {
+        "views": 128,
+        "AUROC>15\u00b0": NaN,
+        "AUROC>5\u00b0": NaN,
+        "Spearman": 0.020700853356032167,
+        "AURC (deg)": 2.2088056804364533
+      },
+      "DTU-64 \u00b7 Self-Audit w/o E_c residual": {
+        "views": 128,
+        "AUROC>15\u00b0": NaN,
+        "AUROC>5\u00b0": NaN,
+        "Spearman": 0.13920358223603,
+        "AURC (deg)": 2.161520619924791
+      },
+      "DTU-64 \u00b7 oracle (sorted by true error)": {
+        "views": 128,
+        "AURC (deg)": 1.8769857614997638
+      },
+      "HiRoom \u00b7 DA3 confidence (original)": {
+        "views": 35,
+        "AUROC>15\u00b0": 0.6176470588235294,
+        "AUROC>5\u00b0": 0.8933333333333333,
+        "Spearman": 0.5632441573677537,
+        "AURC (deg)": 6.237810708114645,
+        "gross failures": 1
+      },
+      "HiRoom \u00b7 Self-Audit": {
+        "views": 35,
+        "AUROC>15\u00b0": 0.8529411764705882,
+        "AUROC>5\u00b0": 0.8,
+        "Spearman": 0.3626558377083099,
+        "AURC (deg)": 6.341583262049082
+      },
+      "HiRoom \u00b7 Self-Audit w/o E_c residual": {
+        "views": 35,
+        "AUROC>15\u00b0": 0.8235294117647058,
+        "AUROC>5\u00b0": 0.84,
+        "Spearman": 0.49684830295534,
+        "AURC (deg)": 6.139082792414972
+      },
+      "HiRoom \u00b7 oracle (sorted by true error)": {
+        "views": 35,
+        "AURC (deg)": 5.095133500422764
+      },
+      "All \u00b7 DA3 confidence (original)": {
+        "views": 363,
+        "AUROC>15\u00b0": 0.9475138121546961,
+        "AUROC>5\u00b0": 0.9877094972067039,
+        "Spearman": 0.1330036778910247,
+        "AURC (deg)": 2.779124403878119,
+        "gross failures": 1
+      },
+      "All \u00b7 Self-Audit": {
+        "views": 363,
+        "AUROC>15\u00b0": 0.9861878453038674,
+        "AUROC>5\u00b0": 0.9715083798882681,
+        "Spearman": 0.1293390834876404,
+        "AURC (deg)": 2.850617983834632
+      },
+      "All \u00b7 Self-Audit w/o E_c residual": {
+        "views": 363,
+        "AUROC>15\u00b0": 0.9834254143646409,
+        "AUROC>5\u00b0": 0.9865921787709497,
+        "Spearman": 0.3835336604800306,
+        "AURC (deg)": 2.579541025617177
+      },
+      "All \u00b7 oracle (sorted by true error)": {
+        "views": 363,
+        "AURC (deg)": 2.1056529496777228
+      }
+    },
+    "signals": {
+      "gap_rot_deg": {
+        "Spearman": 0.25083467553779143,
+        "AUROC>15\u00b0": 1.0,
+        "AUROC>5\u00b0": 0.9960893854748604,
+        "available (%)": 100.0
+      },
+      "gap_center": {
+        "Spearman": 0.09262552747380731,
+        "AUROC>15\u00b0": 0.9751381215469613,
+        "AUROC>5\u00b0": 0.9636871508379888,
+        "available (%)": 100.0
+      },
+      "gap_focal": {
+        "Spearman": 0.04719504362792178,
+        "AUROC>15\u00b0": 0.4005524861878453,
+        "AUROC>5\u00b0": 0.876536312849162,
+        "available (%)": 100.0
+      },
+      "origin_spread": {
+        "Spearman": 0.33809665377151155,
+        "AUROC>15\u00b0": 0.930939226519337,
+        "AUROC>5\u00b0": 0.9793296089385475,
+        "available (%)": 100.0
+      },
+      "pinhole_resid_deg": {
+        "Spearman": 0.39200949327397444,
+        "AUROC>15\u00b0": 0.9806629834254144,
+        "AUROC>5\u00b0": 0.9843575418994414,
+        "available (%)": 100.0
+      },
+      "neg_logconf_depth_mean": {
+        "Spearman": 0.1330036778910247,
+        "AUROC>15\u00b0": 0.9475138121546961,
+        "AUROC>5\u00b0": 0.9877094972067039,
+        "available (%)": 100.0
+      },
+      "neg_logconf_depth_p10": {
+        "Spearman": 0.06524139933117008,
+        "AUROC>15\u00b0": 0.6408839779005525,
+        "AUROC>5\u00b0": 0.7240223463687151,
+        "available (%)": 100.0
+      },
+      "neg_logconf_ray_mean": {
+        "Spearman": -0.044823230422636966,
+        "AUROC>15\u00b0": 0.9779005524861878,
+        "AUROC>5\u00b0": 0.9899441340782122,
+        "available (%)": 100.0
+      },
+      "reproj_disagree": {
+        "Spearman": 0.45173821745222675,
+        "AUROC>15\u00b0": 0.9917127071823204,
+        "AUROC>5\u00b0": 0.9893854748603352,
+        "available (%)": 100.0
+      },
+      "ec_depth_change": {
+        "Spearman": 0.4932625016465374,
+        "AUROC>15\u00b0": 0.9005524861878453,
+        "AUROC>5\u00b0": 0.9083798882681564,
+        "available (%)": 100.0
+      },
+      "ec_rot_change_deg": {
+        "Spearman": 0.2661728107015423,
+        "AUROC>15\u00b0": 1.0,
+        "AUROC>5\u00b0": 0.9039106145251397,
+        "available (%)": 100.0
+      },
+      "ec_ray_change_deg": {
+        "Spearman": 0.3409366078104183,
+        "AUROC>15\u00b0": 1.0,
+        "AUROC>5\u00b0": 0.9949720670391061,
+        "available (%)": 100.0
+      }
+    },
+    "pose_source": {
+      "7Scenes \u00b7 camera head (original, API default)": {
+        "scenes": 2,
+        "AUC@3": 29.252525252525253,
+        "AUC@30": 88.2996632996633
+      },
+      "7Scenes \u00b7 ray map, official RANSAC (original option)": {
+        "scenes": 2,
+        "AUC@3": 32.41414141414141,
+        "AUC@30": 89.23501683501685
+      },
+      "7Scenes \u00b7 ray map, our DLT": {
+        "scenes": 2,
+        "AUC@3": 22.555555555555557,
+        "AUC@30": 87.13872053872056
+      },
+      "7Scenes \u00b7 Self-Audit per-view choice": {
+        "scenes": 2,
+        "AUC@3": 29.400673400673398,
+        "AUC@30": 88.32760942760943,
+        "views using ray pose (%)": 0.5
+      },
+      "7Scenes \u00b7 Self-Audit per-view fusion": {
+        "scenes": 2,
+        "AUC@3": 31.589225589225588,
+        "AUC@30": 88.89797979797981
+      },
+      "7Scenes \u00b7 oracle per-view choice (uses GT)": {
+        "scenes": 2,
+        "AUC@3": 33.946127946127945,
+        "AUC@30": 89.50067340067342
+      },
+      "DTU-64 \u00b7 camera head (original, API default)": {
+        "scenes": 2,
+        "AUC@3": 40.682870370370374,
+        "AUC@30": 93.09441137566137
+      },
+      "DTU-64 \u00b7 ray map, official RANSAC (original option)": {
+        "scenes": 2,
+        "AUC@3": 33.201058201058196,
+        "AUC@30": 91.89236111111111
+      },
+      "DTU-64 \u00b7 ray map, our DLT": {
+        "scenes": 2,
+        "AUC@3": 1.909722222222222,
+        "AUC@30": 79.6238425925926
+      },
+      "DTU-64 \u00b7 Self-Audit per-view choice": {
+        "scenes": 2,
+        "AUC@3": 35.07771164021164,
+        "AUC@30": 92.12218915343915,
+        "views using ray pose (%)": 75.0
+      },
+      "DTU-64 \u00b7 Self-Audit per-view fusion": {
+        "scenes": 2,
+        "AUC@3": 38.144841269841265,
+        "AUC@30": 92.7786044973545
+      },
+      "DTU-64 \u00b7 oracle per-view choice (uses GT)": {
+        "scenes": 2,
+        "AUC@3": 43.33664021164022,
+        "AUC@30": 93.41352513227513
+      },
+      "HiRoom \u00b7 camera head (original, API default)": {
+        "scenes": 2,
+        "AUC@3": 3.908651734738691,
+        "AUC@30": 70.320597277119
+      },
+      "HiRoom \u00b7 ray map, official RANSAC (original option)": {
+        "scenes": 2,
+        "AUC@3": 3.557312252964427,
+        "AUC@30": 70.5028546332894
+      },
+      "HiRoom \u00b7 ray map, our DLT": {
+        "scenes": 2,
+        "AUC@3": 1.0430390865173473,
+        "AUC@30": 60.90579710144927
+      },
+      "HiRoom \u00b7 Self-Audit per-view choice": {
+        "scenes": 2,
+        "AUC@3": 2.755819060166886,
+        "AUC@30": 67.16293368467281,
+        "views using ray pose (%)": 50.36231884057971
+      },
+      "HiRoom \u00b7 Self-Audit per-view fusion": {
+        "scenes": 2,
+        "AUC@3": 3.8866930171278,
+        "AUC@30": 69.27536231884058
+      },
+      "HiRoom \u00b7 oracle per-view choice (uses GT)": {
+        "scenes": 2,
+        "AUC@3": 3.722002635046113,
+        "AUC@30": 72.81400966183574
+      },
+      "All \u00b7 camera head (original, API default)": {
+        "scenes": 6,
+        "AUC@3": 24.61468245254477,
+        "AUC@30": 83.90489065081455
+      },
+      "All \u00b7 ray map, official RANSAC (original option)": {
+        "scenes": 6,
+        "AUC@3": 23.05750395605468,
+        "AUC@30": 83.8767441931391
+      },
+      "All \u00b7 ray map, our DLT": {
+        "scenes": 6,
+        "AUC@3": 8.502772288098374,
+        "AUC@30": 75.88945341092081
+      },
+      "All \u00b7 Self-Audit per-view choice": {
+        "scenes": 6,
+        "AUC@3": 22.411401367017305,
+        "AUC@30": 82.53757742190713,
+        "views using ray pose (%)": 41.954106280193244
+      },
+      "All \u00b7 Self-Audit per-view fusion": {
+        "scenes": 6,
+        "AUC@3": 24.540253292064886,
+        "AUC@30": 83.65064887139164
+      },
+      "All \u00b7 oracle per-view choice (uses GT)": {
+        "scenes": 6,
+        "AUC@3": 27.00159026427143,
+        "AUC@30": 85.24273606492811
+      }
+    },
+    "depth_uncertainty": {
+      "7Scenes \u00b7 DA3 confidence + GT calibration from other datasets": {
+        "scenes": 2,
+        "coverage@50%": 0.573755,
+        "|error|@50%": 0.07375500000000001,
+        "coverage@90%": 0.81766,
+        "|error|@90%": 0.08234000000000002,
+        "NLL": 1.0544434981207547
+      },
+      "7Scenes \u00b7 Self-Audit triple collocation (no GT)": {
+        "scenes": 2,
+        "coverage@50%": 0.3976325,
+        "|error|@50%": 0.1023675,
+        "coverage@90%": 0.7198025,
+        "|error|@90%": 0.1801975,
+        "NLL": 1.9058631318155792
+      },
+      "7Scenes \u00b7 upper bound: per-scene GT fit": {
+        "scenes": 2,
+        "coverage@50%": 0.700145,
+        "|error|@50%": 0.20014500000000002,
+        "coverage@90%": 0.9181325,
+        "|error|@90%": 0.019257499999999983,
+        "NLL": -0.8399507275624782
+      },
+      "7Scenes \u00b7 AUSE of DA3 confidence (same for all)": {
+        "scenes": 2,
+        "AUSE (rel.)": 0.2835872507119388
+      },
+      "HiRoom \u00b7 DA3 confidence + GT calibration from other datasets": {
+        "scenes": 2,
+        "coverage@50%": 0.94841,
+        "|error|@50%": 0.44841000000000003,
+        "coverage@90%": 0.996945,
+        "|error|@90%": 0.096945,
+        "NLL": -0.6410878087411779
+      },
+      "HiRoom \u00b7 Self-Audit triple collocation (no GT)": {
+        "scenes": 2,
+        "coverage@50%": 0.5990575,
+        "|error|@50%": 0.14622749999999998,
+        "coverage@90%": 0.930255,
+        "|error|@90%": 0.04339500000000002,
+        "NLL": -1.4618576214204462
+      },
+      "HiRoom \u00b7 upper bound: per-scene GT fit": {
+        "scenes": 2,
+        "coverage@50%": 0.49762,
+        "|error|@50%": 0.0043300000000000005,
+        "coverage@90%": 0.9122375,
+        "|error|@90%": 0.012237499999999957,
+        "NLL": -1.4790863015439235
+      },
+      "HiRoom \u00b7 AUSE of DA3 confidence (same for all)": {
+        "scenes": 2,
+        "AUSE (rel.)": 0.5265604383684972
+      },
+      "All \u00b7 DA3 confidence + GT calibration from other datasets": {
+        "scenes": 4,
+        "coverage@50%": 0.7610825,
+        "|error|@50%": 0.2610825,
+        "coverage@90%": 0.9073025,
+        "|error|@90%": 0.08964250000000001,
+        "NLL": 0.2066778446897884
+      },
+      "All \u00b7 Self-Audit triple collocation (no GT)": {
+        "scenes": 4,
+        "coverage@50%": 0.49834500000000004,
+        "|error|@50%": 0.12429749999999999,
+        "coverage@90%": 0.82502875,
+        "|error|@90%": 0.11179625000000001,
+        "NLL": 0.22200275519756651
+      },
+      "All \u00b7 upper bound: per-scene GT fit": {
+        "scenes": 4,
+        "coverage@50%": 0.5988825,
+        "|error|@50%": 0.10223750000000001,
+        "coverage@90%": 0.9151849999999999,
+        "|error|@90%": 0.01574749999999997,
+        "NLL": -1.1595185145532008
+      },
+      "All \u00b7 AUSE of DA3 confidence (same for all)": {
+        "scenes": 4,
+        "AUSE (rel.)": 0.405073844540218
+      }
+    },
+    "gates": {
+      "G1 detector signals": {
+        "result": "n.a.",
+        "value": "1/1 datasets; 7Scenes: no gross failures; DTU-64: no gross failures; HiRoom: gap_rot_deg \u03c1=0.67 AUROC=1.00, pinhole_resid_deg \u03c1=0.54 AUROC=0.79",
+        "criterion": "Spearman(head\u2013ray gap or pinhole residual, rotation error) \u2265 0.3 and AUROC(>15\u00b0) \u2265 0.7 on \u2265 2 datasets"
+      },
+      "G2 pose-source choice": {
+        "result": "FAIL",
+        "value": "1/3 datasets; 7Scenes: best single 32.4, fused 31.6, oracle 33.9; DTU-64: best single 40.7, fused 38.1, oracle 43.3; HiRoom: best single 3.9, fused 3.9, oracle 3.7",
+        "criterion": "oracle \u2212 better single source \u2265 2 AUC@3, or fusion \u2265 +0.5 AUC@3, on a majority of datasets"
+      },
+      "G3 GT-free calibration (F2)": {
+        "result": "FAIL",
+        "value": "62% of 16 confidence bins within [0.7, 1.4] (HiRoom); median ratio 1.35",
+        "criterion": "triple-collocation sigma / true sigma within 0.7\u20131.4 in \u2265 75% of confidence bins"
+      },
+      "G4 E_c fixed-point residual": {
+        "result": "FAIL",
+        "value": "AUROC(>15\u00b0) 0.986 with vs 0.983 without the E_c signals (\u0394 +0.003)",
+        "criterion": "adding the E_c residual raises the audit AUROC by \u2265 0.03"
+      }
+    },
+    "audit_model": {
+      "all": {
+        "scheme": "leave-one-dataset-out",
+        "coef gap_rot_deg": -0.03420591376557716,
+        "coef gap_center": 0.009112383520972775,
+        "coef gap_focal": -0.041288903832979666,
+        "coef origin_spread": 0.059016714100520735,
+        "coef pinhole_resid_deg": 0.1353484164384298,
+        "coef neg_logconf_depth_mean": 0.01091527567733468,
+        "coef neg_logconf_depth_p10": 0.006336397268764654,
+        "coef neg_logconf_ray_mean": -0.14553643247030532,
+        "coef reproj_disagree": 0.060937435869572475,
+        "coef ec_depth_change": 0.07043163179425568,
+        "coef ec_rot_change_deg": 0.02144710227865685,
+        "coef ec_ray_change_deg": 0.1536645179592611
+      }
+    }
+  },
+  "baseline_tag": "sa_da3-small_hiroom-7scenes-dtu64_limited2",
+  "commit": "e8676fd382a8f9273048597c00d10c944122d2cf-dirty",
+  "env": {
+    "python": "3.12.16",
+    "torch": "2.15.0+cpu",
+    "platform": "Linux-6.18.55+-x86_64-with-glibc2.39"
+  },
+  "time": "2026-11-25 16:59:29",
+  "notes": "audit fitted leave-one-dataset-out; depth calibration baseline from other datasets; official ray poses missing in 0 scene(s) (DLT used there); replays: sa_da3-small_hiroom-7scenes-dtu64_limited2__ray_official, sa_da3-small_hiroom-7scenes-dtu64_limited2__ray_dlt, sa_da3-small_hiroom-7scenes-dtu64_limited2__audit_select, sa_da3-small_hiroom-7scenes-dtu64_limited2__audit_fuse, sa_da3-small_hiroom-7scenes-dtu64_limited2__oracle_select",
+  "files": [
+    "/kaggle/working/self_audit/sa_da3-small_hiroom-7scenes-dtu64_limited2/risk_coverage.png",
+    "/kaggle/working/self_audit/sa_da3-small_hiroom-7scenes-dtu64_limited2/depth_reliability.png",
+    "/kaggle/working/self_audit/sa_da3-small_hiroom-7scenes-dtu64_limited2/tc_vs_gt_sigma.png",
+    "/kaggle/working/self_audit/sa_da3-small_hiroom-7scenes-dtu64_limited2/audit_coefficients.png",
+    "/kaggle/working/self_audit/sa_da3-small_hiroom-7scenes-dtu64_limited2/audit_examples.png",
+    "/kaggle/working/self_audit/sa_da3-small_hiroom-7scenes-dtu64_limited2/per_view.csv"
+  ]
+}
