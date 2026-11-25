@@ -25,6 +25,7 @@ import numpy as np
 
 from da3.data.kitti import (
     camera_poses,
+    check_split,
     drive_id,
     kitti_calibration,
     lidar_depth_map,
@@ -92,6 +93,8 @@ def main():
     ap.add_argument("--plan", default=str(REPO / "configs" / "lora_analysis.yaml"))
     ap.add_argument("--stride", type=int, default=1, help="keep every k-th frame (1 = all)")
     ap.add_argument("--split-only", action="store_true", help="write split.json for drives already converted")
+    ap.add_argument("--split-from", default=None,
+                    help="use this split (planned_split.json of download_kitti.py) instead of drawing one; leakage-checked")
     ap.add_argument("--skip-existing", action="store_true",
                     help="resume: keep drives whose cameras.json exists (written last, so it marks a complete drive)")
     args = ap.parse_args()
@@ -106,7 +109,17 @@ def main():
         raise SystemExit(f"no *_drive_*_sync folders with image_02/data under {raw}")
     # the split is drawn from the drive NAMES first, so only the drives it uses are converted
     names = [d.name for d in drives]
-    split = make_split(names, eigen, k["n_test_drives"], k["n_val_drives"], k["split_seed"], k.get("n_train_drives"))
+    if args.split_from:
+        planned = json.loads(Path(args.split_from).read_text())
+        avail = {drive_id(n) for n in names}
+        roles = {r: [d for d in planned[r] if d in avail] for r in ("train", "val", "test")}
+        missing = sorted(set(planned["train"] + planned["val"] + planned["test"]) - avail)
+        split = check_split(roles["train"], roles["val"], roles["test"], eigen)
+        split.update(planned_from=str(args.split_from), not_downloaded=missing)
+        if missing:
+            print("[note] planned but not available (yet):", missing)
+    else:
+        split = make_split(names, eigen, k["n_test_drives"], k["n_val_drives"], k["split_seed"], k.get("n_train_drives"))
     needed = set(split["train"]) | set(split["val"]) | set(split["test"])
     stats = {}
     if not args.split_only:

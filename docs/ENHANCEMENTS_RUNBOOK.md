@@ -215,9 +215,13 @@ A-I, chosen with `RUN`; every part, training run and Sec. 6 scene is skipped whe
 | H | fountain: every adapter + the snapshots of `SNAPSHOT_RUN`; differences, side-by-side video, aligned PLYs |
 | I | pre-registered analysis -> `lora/analysis/summary.md` + result records |
 
-1. **KITTI:** on Kaggle attach a public KITTI raw mirror (needs `image_02`, `oxts`, `velodyne_points`
-   and the `calib_*.txt` files per date) or your own zips; on Colab put them on Drive.
-2. **Session 1 (Kaggle, GPU, Internet on):** set `KITTI_RAW`, `FOUNTAIN`; defaults run A-F, H, I.
+1. **KITTI:** register at cvlibs.net (KITTI → Raw Data) and accept the terms. With
+   `KITTI_RAW = "download"` (default, Internet on) part B fetches only the drives of the
+   pre-registered split from the KITTI servers (`scripts/download_kitti.py`: Eigen test drives for the
+   test set, Eigen train drives for train / val, zips > 4 GB excluded by rule, only image_02 / oxts /
+   velodyne kept). Public Kaggle "KITTI" datasets checked on 2026-11-25 have no `oxts` (no poses):
+   not usable.
+2. **Session 1 (Kaggle, GPU, Internet on):** set `FOUNTAIN`; defaults run A-F, H, I.
    Training stops cleanly before the 12-h limit (`SESSION_H`).
 3. **Session 2:** attach session 1's output and set `RESUME_FROM`; set `RUN["sec6"] = True` and split
    `SEC6_RUNS` between Kaggle and Colab (e.g. `["released"]` / `["e3_s0", "e3_s1"]`; Colab: copy the

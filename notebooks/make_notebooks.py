@@ -188,11 +188,12 @@ _LORA_INTRO_PARTS = """| Part | What | Needs | Time (T4, DA3-Small) |
 | H · fountain comparison | every final adapter and the snapshots of `SNAPSHOT_RUN` on the same photos: differences, side-by-side video, aligned PLYs | D, E | ~5 min / model |
 | I · analysis | the pre-registered tests (docs/LORA_ANALYSIS_PLAN.md, plan v2) -> `analysis/summary.md` + result records | F (+ G) | 1 min |
 
-**Inputs.** KITTI raw: per drive the *synced+rectified* data (image_02, oxts, velodyne_points) and the
-calibration of its date, either the zips from cvlibs.net or an unpacked copy (e.g. a public Kaggle
-mirror of KITTI raw: attach it on Kaggle, nothing to download). Plus the fountain photos.
+**Inputs.** KITTI raw: register at cvlibs.net (KITTI → Raw Data) and accept the terms; with
+`KITTI_RAW = "download"` part B then fetches only the ~25 drives of the pre-registered split from the
+KITTI servers (image_02, oxts, velodyne only; no manual download). Public Kaggle "KITTI" sets checked on
+2026-11-25 lack the poses (oxts) and are not usable. Plus the fountain photos.
 
-**Sessions (suggested, 4-day plan).** 1: A-F (Kaggle, the KITTI mirror is attached there).
+**Sessions (suggested, 4-day plan).** 1: A-F, H, I.
 2: G with `SEC6_RUNS = ["released"]` on one platform and `["e3_s0", "e3_s1"]` on the other, both resuming
 from session 1's output; then H and I. Records of different sessions combine (same protocol)."""
 
@@ -268,9 +269,20 @@ if RUN["kitti"] and KITTI_RAW:
     if KITTI_OK:
         print("[checkpoint] part B already complete, skipped")
     else:
-        RAW = prepare_raw(KITTI_RAW)
+        os.makedirs(f"{OUT}/kitti", exist_ok=True)
         urllib.request.urlretrieve(EIGEN_URL, f"{OUT}/kitti_eigen_test_files.txt")
-        !python scripts/prepare_kitti.py --raw "{RAW}" --out {CANON} --eigen-test-list {OUT}/kitti_eigen_test_files.txt --skip-existing
+        SPLIT_FROM = ""
+        if KITTI_RAW == "download":   # official KITTI servers (register at cvlibs.net and accept the terms first)
+            urllib.request.urlretrieve(EIGEN_TRAIN_URL, f"{OUT}/kitti_eigen_train_files.txt")
+            os.makedirs(RAW_TMP, exist_ok=True)
+            if os.path.exists(f"{OUT}/kitti/planned_split.json"):   # keep the split of an earlier session
+                !cp -n {OUT}/kitti/planned_split.json {RAW_TMP}/planned_split.json
+            !python scripts/download_kitti.py --out {RAW_TMP} --eigen-test-list {OUT}/kitti_eigen_test_files.txt                 --eigen-train-list {OUT}/kitti_eigen_train_files.txt
+            !cp {RAW_TMP}/planned_split.json {OUT}/kitti/planned_split.json
+            RAW, SPLIT_FROM = RAW_TMP, f"--split-from {RAW_TMP}/planned_split.json"
+        else:
+            RAW = prepare_raw(KITTI_RAW)
+        !python scripts/prepare_kitti.py --raw "{RAW}" --out {CANON} --eigen-test-list {OUT}/kitti_eigen_test_files.txt --skip-existing {SPLIT_FROM}
         if _exit_code == 0 and is_done(f"{CANON}/split.json"):
             os.makedirs(f"{OUT}/kitti", exist_ok=True)
             !cp {CANON}/split.json {OUT}/kitti/split.json
@@ -487,10 +499,12 @@ SNAPSHOT_RUN = "e3_s0"                      # its snapshots (every 500 steps) ar
 IGNORE_GONOGO = False                       # True = train even without a GO (logged as a deviation)
 RUN = {"check": True, "kitti": True, "gonogo": True, "fountain": True, "train": True,
        "kitti_test": True, "sec6": False, "fountain_arms": True, "analysis": True}
-EIGEN_URL = "https://raw.githubusercontent.com/nianticlabs/monodepth2/master/splits/eigen/test_files.txt"'''
+EIGEN_URL = "https://raw.githubusercontent.com/nianticlabs/monodepth2/master/splits/eigen/test_files.txt"
+EIGEN_TRAIN_URL = "https://raw.githubusercontent.com/nianticlabs/monodepth2/master/splits/eigen_full/train_files.txt"'''
 
 _LORA_COLAB_CONFIG = r'''PRESET = "da3-small"     # primary model of the pre-registered plan
-KITTI_RAW = "/content/drive/MyDrive/DA3/kitti_raw"   # KITTI zips or unpacked drives; "" = skip B, C, E, F
+KITTI_RAW = "download"   # "download" = fetch the needed drives from KITTI (account + terms first); or a folder
+                         # on Drive with KITTI zips / unpacked drives; "" = skip B, C, E, F
 FOUNTAIN = "/content/drive/MyDrive/DA3/fountain"     # the fountain photos; "" = skip D, H
 RESUME_FROM = ""         # optional: an earlier lora output copied to Drive (e.g. a Kaggle session's "lora" folder)
 ''' + _LORA_RUNS_CONFIG + r'''
@@ -517,9 +531,9 @@ if DRIVE_DIR or "/content/drive" in KITTI_RAW + FOUNTAIN + RESUME_FROM:
 if DRIVE_DIR:
     os.makedirs(DRIVE_DIR, exist_ok=True)
 for name, path in (("KITTI_RAW", KITTI_RAW), ("FOUNTAIN", FOUNTAIN), ("RESUME_FROM", RESUME_FROM)):
-    if path and not os.path.exists(path):
+    if path and path != "download" and not os.path.exists(path):
         print(f"{name} = {path} does not exist: ignored")
-KITTI_RAW = KITTI_RAW if KITTI_RAW and os.path.exists(KITTI_RAW) else ""
+KITTI_RAW = KITTI_RAW if KITTI_RAW == "download" or (KITTI_RAW and os.path.exists(KITTI_RAW)) else ""
 FOUNTAIN = FOUNTAIN if FOUNTAIN and os.path.exists(FOUNTAIN) else ""
 if shutil.which("rsync") is None:
     !apt-get -qq install -y rsync > /dev/null
@@ -580,7 +594,8 @@ if CKPT_ON and not globals().get("_AUTOSAVE_STARTED"):
 print("checkpoints:", f"on, every {SAVE_EVERY_MIN} min -> {DRIVE_DIR}" if CKPT_ON else "OFF (nothing survives a disconnect)")'''
 
 _LORA_KAGGLE_CONFIG = r'''PRESET = "da3-small"     # primary model of the pre-registered plan
-KITTI_RAW = ""           # Copy path from the Input panel (KITTI zips or a KITTI raw mirror); "" = skip B, C, E, F
+KITTI_RAW = "download"   # "download" = fetch the needed drives from KITTI (account + terms first; Internet on);
+                         # or Copy path of attached KITTI zips / unpacked raw drives; "" = skip B, C, E, F
 FOUNTAIN = ""            # folder with the fountain photos (Copy path); "" = skip D, H
 RESUME_FROM = ""         # output of an earlier session of this notebook, e.g. "/kaggle/input/<name>/lora"
 ''' + _LORA_RUNS_CONFIG + r'''
