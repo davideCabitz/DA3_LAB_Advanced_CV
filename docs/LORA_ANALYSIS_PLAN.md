@@ -175,3 +175,22 @@ Hypotheses, estimands, tests, margins and decision rules are unchanged. Changed:
   of the official download; test drives = all available Eigen test drives up to 12, by the same rule.
 - training drives: at most 10, drawn with the split seed from the non-Eigen drives (v1: all of them);
   only the drives of the split are converted.
+
+**2. 2026-11-25 / 2026-11-26, after the NO-GO, before any LoRA result.** The plan is not changed by this
+entry. It records what happened, and one problem that must be resolved before any LoRA result exists.
+- **Training after a NO-GO (the deviation noted in the report):**
+  - 2026-11-25 (`IGNORE_GONOGO = True`, commit `7e12db1`): the deviation was logged, but all six runs
+    stopped before step 1 because of a notebook bug (fixed in `29871ce`). No adapter was produced.
+  - 2026-11-26 (defaults, commit `7779f8a`): training skipped, as pre-registered.
+  - **No LoRA number of any arm has been seen.** The gate was re-run in the 2026-11-26 session and
+    reproduced identically (no new drives).
+- **N4 as written is not computable:** the pinned harness (`3d835ec`) evaluates DTU-64 for pose only, so
+  no DTU-64 Chamfer exists (seen in the released reference arm, 2026-11-25). Options, to be chosen and
+  logged here **before** any LoRA result:
+  - (a) N4 reported as "not evaluated" and the no-regression claim restricted to N1–N3;
+  - (b) N4 moved to DTU (22 scenes, reconstruction) with the same +3% relative margin, at the cost of
+    extra compute.
+  Until one is logged, (a) applies by the existing rule `dataset_unavailable: component_reported_as_not_evaluated`.
+- **A/A (descriptive):** the released model, evaluated in two sessions (`e8676fd` smoke test, `7e12db1`),
+  differs by ≤ 0.084 F1 points on the two shared HiRoom scenes (flag at 0.1: not raised) and by 0.12 on
+  7Scenes fire. Pose A/A still to be read from the record file.

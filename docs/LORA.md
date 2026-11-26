@@ -1,8 +1,17 @@
 # LoRA fine-tuning of the released DA3 (enhancement #3 platform): status, expectations, method
 
-**Status: proposal, 2026-11-25. Nothing in this document is implemented yet; it waits for the project
-owner's approval.** The statistics are pre-registered separately in
-[LORA_ANALYSIS_PLAN.md](LORA_ANALYSIS_PLAN.md) (constants in `configs/lora_analysis.yaml`).
+**Status (2026-11-26): implemented and checked on Kaggle; results in
+[reports/enhancement_3_lora.md](../reports/enhancement_3_lora.md).**
+- **Platform check:** passed twice (bit-identical when off, 786,432 trainable parameters, ≈ 0.6 s/step at
+  8 × 280×504).
+- **Go/no-go:** NO-GO, reproduced identically in a fresh session. With the true poses, DA3's depth is
+  unchanged (AbsRel ratio 0.995) and its cameras are ≈ 2× better.
+- **Training:** no LoRA trained yet. The exploratory training after the NO-GO is undecided; its first
+  attempt failed before step 1 (notebook bug, fixed).
+- **Released Sec. 6 reference arm:** done on HiRoom, 7Scenes and DTU-64.
+
+The text below is the original proposal of 2026-11-25 and is kept unchanged. Statistics pre-registered
+in [LORA_ANALYSIS_PLAN.md](LORA_ANALYSIS_PLAN.md) (constants in `configs/lora_analysis.yaml`).
 
 Sources: [da3_enhancement_report.md](da3_enhancement_report.md) §2.2 (K8), §3.2–3.5 (novelty),
 §4.4 (E3), §5; [DYNAMIC_SCENES.md](DYNAMIC_SCENES.md) C4; the paper (Sec. 3, Sec. 6, Tab. 4, 7, 8);
