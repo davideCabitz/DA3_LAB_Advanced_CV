@@ -1047,7 +1047,8 @@ Outputs (in `/kaggle/working/`): `self_audit/<tag>/` (summary.md, figures, per_v
 DATASETS = ["hiroom", "7scenes", "dtu64"]   # add "eth3d", "scannetpp" in a later session (15 / 11 GB)
 MAX_SCENES = 2        # 2 = quick end-to-end check (labelled "limited"); 0 = all scenes (the real numbers)
 PHASE = "all"         # "all" | "infer" (GPU: baseline run + dump) | "analyse" (CPU is enough)
-RESUME_FROM = ""      # output root of an earlier "infer" run of this notebook, e.g. "/kaggle/input/<name>"
+RESUME_FROM = ""      # output root of an earlier run of this notebook (Add Input > Your Work, then "Copy path"):
+                      # its finished records are reused (e.g. the original DA3 scoring is not repeated)
 WORK = "/tmp/eval_self_audit"               # harness exports + audit dumps (large, not saved)
 # split mode only: for PHASE = "infer" use WORK = "/kaggle/working/eval_self_audit" so the dump is saved
 OUT = "/kaggle/working/self_audit"          # figures, CSV, summaries
@@ -1057,9 +1058,19 @@ DS = " ".join(DATASETS)
 def tag_for(m):
     return f"sa_{m}_{'-'.join(DATASETS)}" + (f"_limited{MAX_SCENES}" if MAX_SCENES else "")
 os.makedirs(RESULTS, exist_ok=True)
+def is_done(path):
+    """A finished scoring leaves a complete JSON record."""
+    try:
+        json.load(open(path)); return True
+    except Exception:
+        return False
 if RESUME_FROM:
-    !mkdir -p {WORK} && cp -rn {RESUME_FROM}/eval_self_audit/* {WORK}/
-    !cp -rn {RESUME_FROM}/self_audit/results/* {RESULTS}/ 2>/dev/null; ls {RESULTS}
+    assert os.path.exists(RESUME_FROM), f"RESUME_FROM not found: {RESUME_FROM} (use 'Copy path' in the Input panel)"
+    if os.path.exists(f"{RESUME_FROM}/eval_self_audit"):   # exports + dumps of an earlier PHASE="infer" run
+        !mkdir -p {WORK} && cp -rn {RESUME_FROM}/eval_self_audit/* {WORK}/
+    if os.path.exists(f"{RESUME_FROM}/self_audit/results"):
+        !cp -rn {RESUME_FROM}/self_audit/results/* {RESULTS}/
+    !find {RESULTS} -name "*.json" | sort
 print({m: tag_for(m) for m in MODELS})'''),
         md("### Data: DA3-BENCH subsets (HF `depth-anything/DA3-BENCH`)"),
         code('''from huggingface_hub import hf_hub_download
@@ -1092,13 +1103,15 @@ pose-source variants are written with the **same depth** and scored by the harne
         code('''if PHASE in ("all", "analyse"):
     for m in MODELS:
         t = tag_for(m)
-        if SPLIT:   # scores of the original DA3 run (Python 3.12, CPU), from the exports of step 1
+        if SPLIT and is_done(f"{RESULTS}/baseline/{t}.json"):
+            print(f"{t}: original DA3 already scored (record from RESUME_FROM or step 1), not repeated")
+        elif SPLIT:   # scores of the original DA3 run (Python 3.12, CPU), from the exports of step 1
             !{PY312} scripts/eval_bench.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
                 --weights official:{m} --datasets {DS} --modes {MODES} --max-scenes {MAX_SCENES} \\
                 --tag {t} --enhancement baseline --variant head --eval-only --results-root {RESULTS}
         !{SCORER} scripts/self_audit_eval.py --official-src {OFFICIAL_SRC} --bench-root {BENCH} --work-root {WORK} \\
             --baseline-tag {t} --weights official:{m} --datasets {DS} --max-scenes {MAX_SCENES} \\
-            --results-root {RESULTS} --out-dir {OUT}/{t} {RECON_VARIANTS}'''),
+            --results-root {RESULTS} --out-dir {OUT}/{t} {RECON_VARIANTS} --resume'''),
         md("### 3 · Results: original DA3 vs DA3 + Self-Audit"),
         code('''from IPython.display import Image, Markdown, display
 for m in MODELS:
