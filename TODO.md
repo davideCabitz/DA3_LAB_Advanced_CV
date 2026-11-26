@@ -56,6 +56,14 @@ Top 3 from the multi-agent study (docs/da3_enhancement_report.md §4–5). Run t
   - [!] session 2: training anyway as a logged deviation (IGNORE_GONOGO = True), exploratory; then F, I
   - [ ] session 3: part G (Sec. 6, split over Kaggle / Colab), then I again
   - [ ] copy `lora/results/*` into `experiments/results/`; fill reports/enhancement_3_lora.md §4.2-4.5; fountain / photo set
+- [~] #4 lens-consistent DA3 (P1, chosen 2026-11-26 after #1-#3 failed their gates; docs/LENS.md): implemented
+      (`src/da3/enhancements/lens/`, `scripts/lens_eval.py`, `scripts/lens_demo.py`, `scripts/colmap_reference.py`,
+      `eval_bench.py --lens`, records with `protocol.input`, notebook `10_lens`, tests `tests/test_lens.py`,
+      pre-registered plan `configs/lens_analysis.yaml`)
+  - [!] `10_lens` quick check (`MAX_SCENES = 2`): unit tests + GPU parity (gate L0) must pass; send `lens/summary.md`
+  - [!] photo set of the Trento building (capture recipe LENS.md §8, originals with EXIF) as a Kaggle dataset -> `PHOTOS`
+  - [!] `10_lens` full run (`MAX_SCENES = 0`, DA3-Small; DA3-Base if time) -> gates L1-L4
+  - [ ] copy `lens/results/*` into `experiments/results/`, commit; fill reports/enhancement_4_lens.md
 - [ ] "enhancement experiment" template (config + eval command)
 - [ ] VGGT / Pi3 / DA2 comparisons (not started)
 

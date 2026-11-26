@@ -10,8 +10,11 @@ original DA3 next to all enhancements. Fields:
 * identity: `enhancement` ("baseline", "self_audit", "foveated", "pose_distill", ...), `variant`
   (e.g. "head", "ray_official", "audit_select"), `tag` (unique run name), `setting` tag
   ([official] / [reduced-scale]), `weights`;
-* protocol: datasets, scenes, max_frames, modes, ref_view_strategy. Two records are only compared
-  when their protocol key and weights match (same data, same scenes, same frame sampling);
+* protocol: datasets, scenes, max_frames, modes, ref_view_strategy, and optionally `input` (how the
+  input images were changed before the model saw them, e.g. "lens:zoom=2,fraction=0.3" for the
+  mixed-lens protocol of enhancement #4; absent = the dataset images as they are). Two records are
+  only compared when their protocol key and weights match (same data, same scenes, same frame
+  sampling, same input);
 * `sec6`: means of the released harness, keyed "<data>_<mode>" (e.g. "hiroom_pose" ->
   {"auc03": ..., "auc30": ...}, "hiroom_recon_unposed" -> {"fscore": ..., "overall": ...});
 * `sec6_per_scene`: same, per scene (optional);
@@ -33,9 +36,13 @@ SCHEMA = "da3-result/1"
 REQUIRED = ("schema", "enhancement", "variant", "tag", "setting", "weights", "protocol")
 
 
-def protocol(datasets, scenes="all", max_frames=100, modes=(), ref_view_strategy="first") -> dict:
-    return {"datasets": sorted(datasets), "scenes": scenes if scenes == "all" else sorted(scenes),
-            "max_frames": int(max_frames), "modes": sorted(modes), "ref_view_strategy": ref_view_strategy}
+def protocol(datasets, scenes="all", max_frames=100, modes=(), ref_view_strategy="first",
+             input: str | None = None) -> dict:
+    p = {"datasets": sorted(datasets), "scenes": scenes if scenes == "all" else sorted(scenes),
+         "max_frames": int(max_frames), "modes": sorted(modes), "ref_view_strategy": ref_view_strategy}
+    if input:
+        p["input"] = str(input)
+    return p
 
 
 def make_record(*, enhancement: str, variant: str, tag: str, setting: str, weights: str, protocol: dict,
@@ -92,4 +99,5 @@ def load_records(*roots: str | Path) -> list[dict]:
 def protocol_key(record: dict) -> tuple:
     p = record["protocol"]
     scenes = p["scenes"] if p["scenes"] == "all" else tuple(p["scenes"])
-    return (record["weights"], tuple(p["datasets"]), scenes, p["max_frames"], p.get("ref_view_strategy"))
+    return (record["weights"], tuple(p["datasets"]), scenes, p["max_frames"], p.get("ref_view_strategy"),
+            p.get("input"))

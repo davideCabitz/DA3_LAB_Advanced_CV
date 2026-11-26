@@ -86,9 +86,18 @@ def fuse_point_cloud(points, colors, conf=None, conf_percentile: float = 40.0, m
     return P, C
 
 
+def _per_view_hw(hw, n: int) -> list:
+    """hw = one (H, W) for all views, or a list of n per-view (H, W)."""
+    if len(hw) == 2 and np.ndim(hw[0]) == 0:
+        return [(int(hw[0]), int(hw[1]))] * n
+    return [(int(h), int(w)) for h, w in hw]
+
+
 def write_transforms_json(path, w2c, K, hw, image_names, extra: dict | None = None):
-    """NeRF-style transforms.json with per-frame intrinsics."""
-    H, W = hw
+    """NeRF-style transforms.json with per-frame intrinsics (and per-frame image sizes when `hw` is a
+    list of per-view (H, W); the top-level w / h are then those of the first view)."""
+    hws = _per_view_hw(hw, len(image_names))
+    H, W = hws[0]
     w2c = _to44(w2c)
     frames = []
     for i, name in enumerate(image_names):
@@ -97,7 +106,7 @@ def write_transforms_json(path, w2c, K, hw, image_names, extra: dict | None = No
         frames.append({
             "file_path": name,
             "transform_matrix": (c2w_cv @ CV_TO_GL).tolist(),  # OpenGL / NeRF convention
-            "fl_x": k[0, 0], "fl_y": k[1, 1], "cx": k[0, 2], "cy": k[1, 2], "w": W, "h": H,
+            "fl_x": k[0, 0], "fl_y": k[1, 1], "cx": k[0, 2], "cy": k[1, 2], "w": hws[i][1], "h": hws[i][0],
             "w2c_opencv": w2c[i].tolist(),
             "K": k.tolist(),
         })
@@ -107,16 +116,17 @@ def write_transforms_json(path, w2c, K, hw, image_names, extra: dict | None = No
 
 
 def write_colmap_text(out_dir, w2c, K, hw, image_names):
-    """COLMAP text model (cameras.txt, images.txt, empty points3D.txt)."""
+    """COLMAP text model (cameras.txt, images.txt, empty points3D.txt); `hw` as in write_transforms_json."""
     from scipy.spatial.transform import Rotation
 
-    H, W = hw
+    hws = _per_view_hw(hw, len(image_names))
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     w2c = _to44(w2c)
     cams, imgs = ["# CAMERA_ID MODEL WIDTH HEIGHT PARAMS[]"], ["# IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID NAME", "#"]
     for i, name in enumerate(image_names):
         k = K[i]
+        H, W = hws[i]
         cams.append(f"{i + 1} PINHOLE {W} {H} {k[0, 0]:.6f} {k[1, 1]:.6f} {k[0, 2]:.6f} {k[1, 2]:.6f}")
         qx, qy, qz, qw = Rotation.from_matrix(w2c[i][:3, :3]).as_quat()
         t = w2c[i][:3, 3]
@@ -127,11 +137,21 @@ def write_colmap_text(out_dir, w2c, K, hw, image_names):
     (out / "points3D.txt").write_text("# empty\n")
 
 
+def _valid_values(maps) -> np.ndarray:
+    """Finite positive values of a stacked (N, H, W) array or of a list of maps of any sizes."""
+    out = []
+    for d in maps:
+        d = np.asarray(d)
+        out.append(d[np.isfinite(d) & (d > 0)].ravel())
+    return np.concatenate(out)
+
+
 def tsdf_mesh(depth, rgb, K, w2c, voxel: float | None = None, depth_trunc: float | None = None):
-    """Open3D TSDF fusion of per-view depth maps -> (vertices, faces, colors uint8)."""
+    """Open3D TSDF fusion of per-view depth maps -> (vertices, faces, colors uint8). depth / rgb: stacked
+    arrays or lists of per-view maps (views may have different sizes; K in each view's pixels)."""
     import open3d as o3d
 
-    d_valid = depth[np.isfinite(depth) & (depth > 0)]
+    d_valid = _valid_values(depth)
     med = float(np.median(d_valid))
     voxel = voxel or med / 256.0
     vol = o3d.pipelines.integration.ScalableTSDFVolume(
@@ -158,11 +178,13 @@ def tsdf_mesh(depth, rgb, K, w2c, voxel: float | None = None, depth_trunc: float
 def depth_mesh(points, rgb, conf=None, conf_percentile=40.0, step: int = 2, max_edge_ratio: float = 0.05,
                mask=None):
     """Fallback mesher: triangulate each view's pixel grid, dropping triangles across depth edges
-    (and pixels outside `mask`)."""
+    (and pixels outside `mask`). Stacked arrays or lists of per-view maps (any sizes)."""
     verts, faces, cols, off = [], [], [], 0
     thr = None
     if conf is not None:
-        thr = np.percentile(conf if mask is None else np.asarray(conf)[np.asarray(mask)], conf_percentile)
+        sel = [np.asarray(c).ravel() if mask is None else np.asarray(c)[np.asarray(m)].ravel()
+               for c, m in zip(conf, mask if mask is not None else [None] * len(conf))]
+        thr = np.percentile(np.concatenate(sel), conf_percentile)
     for i in range(len(points)):
         P = points[i][::step, ::step]
         C = rgb[i][::step, ::step]

@@ -1,0 +1,49 @@
+# Pre-registered statistical analysis plan, enhancement #4 (lens-consistent DA3).
+# Fixed on 2026-11-26, BEFORE any Kaggle run of notebooks/10_lens (the git history is the timestamp).
+# Read by `scripts/lens_eval.py analyse`; its SHA-256 is stored in every result record, so a later
+# change of the plan is visible. Reasons for every choice: docs/LENS.md §6. Do NOT edit after the
+# results are in; a new plan = a new version, logged in docs/LENS.md §10 (deviations).
+version: 1
+
+ci_level: 0.95                 # two-sided CIs; a decision on a CI bound = one-sided test at 2.5%
+bootstrap:
+  n: 4000
+  seed: 0                      # resampling unit: the scene (cluster bootstrap), paired across arms
+
+primary_protocol: z2_f30       # 30% of the views (never view 0) zoomed 2x (focal length x 2)
+secondary_protocols:           # descriptive, Bonferroni-adjusted CIs, never decide a gate
+  - z1p5_f30
+  - z3_f30
+  - z2_f70                     # the zoomed views are the majority (an "ultrawide minority" set)
+
+scale_band: 0.05               # depth scale ratio zoomed / normal views counts as consistent within
+                               # [1 / 1.05, 1.05]; the paper protocol's per-view alignment noise
+                               # (A/A of enhancement #2: 2-3% between views) sits inside it
+auc_threshold: 0.0             # P1 must improve AUC@30 (points) over the released DA3: CI above 0
+
+gates:
+  L0: routing / no-op parity   # GPU: every arm with no zoomed view is bit-identical to the released
+                               # adapter (scripts/lens_eval.py parity); must PASS before anything else
+  L1:                          # the problem exists: DA3 as released (arm native) on the primary
+    arm: native                # protocol has a depth-scale offset between zoomed and normal views
+    metric: scale_ratio        # geometric mean over scenes of the per-scene ratio
+    rule: outside_band         # PASS = CI entirely outside the band (offset exists); FAIL = CI inside
+                               # the band (DA3 is lens-consistent: P1 stops, reported as a finding)
+  L2:                          # P1's mechanism removes the offset (true zoom)
+    arm: canon_oracle
+    metric: scale_ratio
+    rule: inside_band          # PASS = CI inside the band; FAIL = CI entirely outside
+  L3:                          # PRIMARY ENDPOINT: deployable P1 improves Sec. 6 pose accuracy on the
+    test: canon_self           # mixed-lens set over the released DA3 (paired per scene, all datasets)
+    reference: native
+    metric: auc30
+    rule: above_threshold      # PASS = CI of the mean difference > auc_threshold
+  L4:                          # the zoom of every view is estimated well enough from DA3 itself
+    arm: canon_self
+    metric: z_err_zoom         # median |estimated / true relative zoom - 1| over the zoomed views
+    threshold: 0.10            # PASS = CI entirely <= 10%
+
+descriptive:                   # reported with CIs, never decide anything
+  - canonpad_oracle scale ratio (hypothesis H_ang vs H_grid, docs/LENS.md §3)
+  - AUC@3, cross-pair AUC@30 (rotation / translation apart), F1 without poses, focal ratio
+  - gap to the unzoomed ceiling (arm unzoomed)

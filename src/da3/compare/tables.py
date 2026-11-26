@@ -96,7 +96,8 @@ def sec6_table(records: list[dict]) -> list[dict]:
         scenes = key[2]
         tables.append({"weights": key[0], "datasets": datasets,
                        "scenes": "all" if scenes == "all" else f"{len(scenes)} (limited)",
-                       "max_frames": key[3], "reference": None if ref is None else ref["tag"],
+                       "max_frames": key[3], "input": key[5] if len(key) > 5 else None,
+                       "reference": None if ref is None else ref["tag"],
                        "columns": cols, "rows": rows})
     return tables
 
@@ -105,7 +106,7 @@ def sec6_markdown(records: list[dict]) -> str:
     out = []
     for t in sec6_table(records):
         out.append(f"#### {model_name(t['weights'])} · datasets {', '.join(t['datasets'])} · scenes {t['scenes']} "
-                   f"· ≤ {t['max_frames']} frames")
+                   f"· ≤ {t['max_frames']} frames" + (f" · input {t['input']}" if t.get("input") else ""))
         out.append("Differences in brackets are relative to the original DA3 (API default: camera-head poses)"
                    + ("" if t["reference"] else "; **no reference run in this group**") + ". ▲ better, ▼ worse.\n")
         head = ["Model", "Enhancement", "Variant"] + [f"{DATA_NAMES.get(d, d)} {label}" for d, _, _, label, _, _ in t["columns"]]

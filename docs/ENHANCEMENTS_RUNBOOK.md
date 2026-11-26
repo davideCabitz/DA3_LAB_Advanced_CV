@@ -11,6 +11,7 @@ enhancements. The enhancements, their novelty check and the plan are in
 | `06_foveated` | Enhancement #2, Foveated DA3: mixed per-view resolutions in one pass (view level + region zoom) | GPU; region zoom in its own session |
 | `07_lora` (+ `07_lora_colab`) | Enhancement #3 platform, part 0: LoRA checks on the GPU, KITTI conversion, E3 go/no-go, fountain reference (§3b) | GPU |
 | `09_compare_all` | original DA3 vs every enhancement, from the saved result records | None (CPU) |
+| `10_lens` | Enhancement #4, lens-consistent DA3: mixed-lens Sec. 6 protocol (5 arms), gates L0–L4, photo demo (§3c) | GPU T4 ×2 (one works); TSDF scoring on CPU |
 
 ## 1. How results are stored (the contract every enhancement follows)
 
@@ -19,9 +20,10 @@ Every run, original or enhanced, writes one **standard result record** (JSON, sc
 
 ```
 experiments/results/<enhancement>/<tag>.json
-  enhancement  "baseline" | "self_audit" | "foveated" | "pose_distill"
-  variant      e.g. "head" (API default), "ray_official", "audit_fuse", "head_res336", "fov25_504-252"
-  weights, setting ([official] / [reduced-scale]), protocol (datasets, scenes, max frames)
+  enhancement  "baseline" | "self_audit" | "foveated" | "pose_distill" | "lens"
+  variant      e.g. "head" (API default), "ray_official", "audit_fuse", "head_res336", "fov25_504-252", "canon_self"
+  weights, setting ([official] / [reduced-scale]), protocol (datasets, scenes, max frames, optional input:
+               "lens:zoom=2,fraction=0.3" = the mixed-lens protocol of 10_lens, never paired with plain Sec. 6)
   sec6         paper-protocol means from the released harness (pose AUC, F1 / Chamfer)
   extra        enhancement-specific metric groups
   baseline_tag the original-DA3 run it is compared with
@@ -232,6 +234,28 @@ A-I, chosen with `RUN`; every part, training run and Sec. 6 scene is skipped whe
    `baseline/`, `lora/`) and commit. Send `lora_check.json`, `gonogo_*.md`, `kitti_test_*.md`,
    `analysis/summary.md`, `fountain/compare_*/compare.md`.
 
+## 3c. Run `10_lens` (enhancement #4: lens-consistent DA3)
+
+Plan, hypothesis, novelty and the pre-registered gates: [LENS.md](LENS.md) (constants in
+`configs/lens_analysis.yaml`, do not edit after the runs). Write-up: [reports/enhancement_4_lens.md](../reports/enhancement_4_lens.md).
+
+1. **Push the repo**, import `notebooks/10_lens.ipynb`, **Accelerator = GPU T4 ×2**, Internet on. Optional: upload the
+   photo set (original files, with EXIF; capture recipe in LENS.md §8) as a private Kaggle dataset, attach it and set
+   `PHOTOS`.
+2. **Session 1, quick check:** `MAX_SCENES = 2` (labelled "limited"). Parts 0 (unit tests + GPU parity = gate L0; the
+   notebook stops if they fail), 1 (primary protocol, 5 arms), 2 (secondary, pose only), 3 (gates), 4 (photo demo).
+   ~30–45 min. Send `lens/summary.md` and `lens/parity_*.json`.
+3. **Session 2, real numbers:** `MAX_SCENES = 0` (DA3-Small). ~4–5 h; inference runs two arms at a time (one per
+   T4), the TSDF scoring is CPU-bound. If it stops, attach the output and set `RESUME_FROM`: finished arms
+   (`views_*.json` present) are skipped; an unfinished arm starts again (its exports were in `/tmp`). DA3-Base: a
+   further session with `MODELS = ["da3-base"]`.
+4. **What the gates mean:** L1 FAIL = DA3 is already lens-consistent: P1 is not needed and that is the result (report
+   it as such, it is still a finding about DA3). L1 PASS + L3 PASS = P1 fixes a real failure of the released model.
+   INCONCLUSIVE is reported as INCONCLUSIVE.
+5. **Save:** `lens_results.zip` (summaries, figures, per-view JSON, records); copy `lens/results/*` into
+   `experiments/results/` (sub-folders `baseline/`, `lens/`) and commit. The photo-demo Blender packages are separate
+   zips under `lens/demo/<model>/`.
+
 ## 4. Save the results (needed for 09)
 
 - Download the zip from the notebook output: `self_audit_results.zip` (05) or
@@ -276,3 +300,6 @@ A-I, chosen with `RUN`; every part, training run and Sec. 6 scene is skipped whe
 - ❌ **Don't tune anything on the test data.** The audit is fitted leave-one-dataset-out. With a
   single dataset it falls back to leave-one-scene-out, and the record says so.
 - ❌ **Don't delete `eval_self_audit/` before the analysis has run.** It holds the dumps.
+- ❌ **Don't put mixed-lens (10_lens) numbers next to plain Sec. 6 numbers.** The input differs (30% of the views
+  zoomed); the records carry `protocol.input` so `da3.compare` keeps them apart. Compare arms within the protocol.
+- ❌ **Don't change `configs/lens_analysis.yaml` after seeing 10_lens results.** Log any deviation in LENS.md §10.

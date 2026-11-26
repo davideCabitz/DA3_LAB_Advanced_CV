@@ -1,5 +1,5 @@
 """Generate the thin Kaggle notebooks (00_setup ... 04_demo_export, 05_self_audit, 06_foveated, 07_lora (+ _colab),
-09_compare_all) from the cell lists below.
+09_compare_all, 10_lens) from the cell lists below.
 
 All logic lives in src/ and scripts/; notebooks only clone the repo, install pinned deps, attach
 inputs and call scripts. Re-run `python notebooks/make_notebooks.py` after editing this file.
@@ -713,6 +713,244 @@ if True:
             md(_LORA_H_MD), code(_LORA_H),
             md("### I · Pre-registered analysis (plan v2)"), code(_LORA_I),
             save_md, save]
+
+
+# ----------------------------------------------------------------------------- 10_lens (enhancement #4)
+LENS_NOTEBOOK = [
+    md("""# 10 · Enhancement 4: lens-consistent DA3 (photo sets with mixed zoom / lenses / orientations)
+Training-free enhancement on the **released** weights (setting **[official]**); the network is not changed.
+Plan, hypothesis, novelty check and pre-registered gates: `docs/LENS.md` · constants: `configs/lens_analysis.yaml`
+(do not edit after the runs) · how to run and save: `docs/ENHANCEMENTS_RUNBOOK.md` §3c · write-up:
+`reports/enhancement_4_lens.md`.
+
+**Problem.** Enhancement #2 found that DA3's depth scale follows how large things look *in patch units*
+(scale ratio ≈ (resolution ratio)^0.7). Real photo sets mix lenses (phone 0.5× / 1× / 2× / 3×, zoom on details)
+and orientations; the released pipeline centre-crops every photo to one size and runs them all on one grid, so a
+zoomed photo has a finer angular resolution (pixels per degree) than the others. **Hypothesis H_ang:** its depth
+comes out at a different scale, its camera is misplaced along the viewing direction, the facade splits into
+layers. **P1 (fix):** give every view the same angular resolution by processing it at its own resolution, in one
+pass (mixed-resolution routing of enhancement #2, bit-identical at equal resolution); keep native aspect ratios.
+
+**Mixed-lens Sec. 6 protocol** (new, compared only with itself): the released harness and GT are unchanged; inside
+the adapter 30% of the views (never view 0) are zoomed 2× (centred crop of 1/2 of each side, resized back), and every
+prediction is mapped back exactly to the dataset image frame.
+
+| Arm | What | Role |
+|---|---|---|
+| `unzoomed` | no zoom | ceiling |
+| `native` | DA3 as released on the zoomed set (one grid) | reference row |
+| `canon_oracle` | P1 with the true zoom | mechanism (gate L2) |
+| `canonpad_oracle` | P1 padded back to one grid | diagnostic: H_ang vs H_grid |
+| `canon_self` | P1, zoom estimated from DA3's own first pass | **deployable P1 (primary endpoint L3)** |
+
+| Part | What | Time (2× T4, DA3-Small, all scenes) |
+|---|---|---|
+| 0 · checks | unit tests (CPU) + GPU parity: no zoomed view ⇒ every arm bit-identical to the released adapter (gate L0) | ~5 min |
+| 1 · primary protocol | 5 arms × HiRoom / 7Scenes / DTU-64, pose + TSDF F1, per-view analysis | ~3–4 h (TSDF on CPU) |
+| 2 · secondary protocols | zoom 1.5× / 3× / 70% zoomed views, 3 arms, pose only | ~1 h |
+| 3 · analysis | pre-registered gates L1–L4, tables, figures, result records | ~1 min |
+| 4 · photo demo | your photos: released vs orientation-only vs P1 (+ COLMAP pseudo-GT) | ~10 min / model |
+
+Settings: **Accelerator = GPU T4 ×2** (one T4 works, slower), **Internet = on**. Start with `MAX_SCENES = 2` (quick
+end-to-end check, "limited"), then `MAX_SCENES = 0`. A session that stops can be resumed: attach its output and set
+`RESUME_FROM`; finished runs are skipped. Outputs in `/kaggle/working/lens/`: `summary.md`, `gates.json`, figures,
+`views_*.json`, `results/` (standard result records: **copy them into the repo under `experiments/results/` and
+commit**), `demo/`."""),
+    code(SETUP),
+    code(OFFICIAL),
+    code(RECON_CHECK.replace("__PATH__", "/kaggle/working/open3d_check.json")),
+    code(SCORING_ENV.replace("__FULL_MODES__", "pose recon_unposed")),
+    md("### Configuration"),
+    code('''import torch, shutil, glob
+MODELS = ["da3-small"]                      # released weights (Apache-2.0); add "da3-base" for the second model
+DATASETS = ["hiroom", "7scenes", "dtu64"]   # DTU-64 counts for pose only (as in the paper)
+MAX_SCENES = 2        # 2 = quick end-to-end check (labelled "limited"); 0 = all scenes (the real numbers)
+PRIMARY = "zoom=2,fraction=0.3"             # pre-registered primary protocol (configs/lens_analysis.yaml)
+ARMS = ["unzoomed", "native", "canon_oracle", "canonpad_oracle", "canon_self"]
+SECONDARY = ["zoom=1.5,fraction=0.3", "zoom=3,fraction=0.3", "zoom=2,fraction=0.7"]   # descriptive, pose only
+SECONDARY_ARMS = ["native", "canon_oracle", "canon_self"]
+RUN = {"tests": True, "parity": True, "primary": True, "secondary": True, "analyse": True, "demo": True}
+PHOTOS = ""            # photo demo: a folder of photos of ONE static scene, e.g. "/kaggle/input/trento-building/photos"
+DEMO_MODELS = ["da3-small", "da3-base"]
+COLMAP = True          # COLMAP pseudo ground truth for the photo demo (CPU, a few minutes)
+RESUME_FROM = ""       # output root of an earlier run of this notebook (Add Input > Your Work > "Copy path")
+KEEP_EXPORTS = False   # harness exports are ~1-3 GB per run; the per-view analysis reads them before deletion
+
+OUT = "/kaggle/working/lens"
+RESULTS = f"{OUT}/results"                  # standard result records (commit these)
+LOGS = f"{OUT}/logs"
+WORK = "/tmp/lens_work"                     # harness workspace and exports (large, not kept)
+BENCH = "/tmp/da3bench"
+PLAN = "configs/lens_analysis.yaml"
+LIM = f"_limited{MAX_SCENES}" if MAX_SCENES else ""
+NGPU = max(1, torch.cuda.device_count())
+for d in (OUT, RESULTS, LOGS):
+    os.makedirs(d, exist_ok=True)
+if RESUME_FROM:
+    assert os.path.exists(RESUME_FROM), f"RESUME_FROM not found: {RESUME_FROM}"
+    src = f"{RESUME_FROM}/lens" if os.path.exists(f"{RESUME_FROM}/lens") else RESUME_FROM
+    !cp -rn {src}/* {OUT}/
+print("GPUs:", NGPU, "| scoring Python:", SCORER, "| primary modes:", MODES)'''),
+    code(r'''# --- helpers: one job = one arm of one protocol through the released harness -----------------------------
+import subprocess
+from da3.enhancements.lens import LensSpec
+
+def is_done(path):
+    try:
+        json.load(open(path)); return True
+    except Exception:
+        return False
+
+def tag_for(m, prot, arm):
+    return f"lens_{m}_{'-'.join(DATASETS)}{LIM}__{LensSpec.parse(prot).protocol_id}__{arm}"
+
+def views_path(t):
+    return f"{OUT}/views_{t}.json"
+
+def sh(cmd, log, env=None):
+    """Run a command, log its output, show the tail, stop the notebook if it fails."""
+    with open(log, "w") as f:
+        p = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, env=env)
+    tail = open(log).read().splitlines()[-12:]
+    print("\n".join(tail))
+    assert p.returncode == 0, f"failed (exit {p.returncode}): see {log}"
+
+def bench_cmd(py, m, prot, arm, modes, extra):
+    enh, var = {"native": ("baseline", "head"), "unzoomed": ("baseline", "unzoomed_ceiling")}.get(arm, ("lens", arm))
+    return [py, "scripts/eval_bench.py", "--official-src", OFFICIAL_SRC, "--bench-root", BENCH, "--work-root", WORK,
+            "--weights", f"official:{m}", "--datasets", *DATASETS, "--modes", *modes, "--max-scenes", str(MAX_SCENES),
+            "--tag", tag_for(m, prot, arm), "--enhancement", enh, "--variant", var,
+            "--baseline-tag", tag_for(m, prot, "native"), "--results-root", RESULTS, "--lens", f"arm={arm},{prot}",
+            *extra]
+
+def run_protocol(m, prot, arms, modes):
+    """Inference of up to NGPU arms in parallel (one GPU each), then CPU scoring + per-view analysis."""
+    todo = [a for a in arms if not is_done(views_path(tag_for(m, prot, a)))]
+    for a in arms:
+        if a not in todo:
+            print("already done:", tag_for(m, prot, a))
+    for i in range(0, len(todo), NGPU):
+        batch = todo[i:i + NGPU]
+        procs = []
+        for g, arm in enumerate(batch):
+            t = tag_for(m, prot, arm)
+            env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(g))
+            log = open(f"{LOGS}/{t}__infer.log", "w")
+            procs.append((arm, t, subprocess.Popen(bench_cmd("python", m, prot, arm, modes, ["--infer-only", "--skip-existing"]),
+                                                   stdout=log, stderr=subprocess.STDOUT, env=env)))
+            print(f"[GPU {g}] inference: {t}")
+        for arm, t, p in procs:
+            rc = p.wait()
+            print("\n".join(open(f"{LOGS}/{t}__infer.log").read().splitlines()[-3:]))
+            assert rc == 0, f"inference failed for {t}: see {LOGS}/{t}__infer.log"
+        for arm, t, _ in procs:
+            print(f"scoring: {t}")
+            sh(bench_cmd(SCORER, m, prot, arm, modes, ["--eval-only"]), f"{LOGS}/{t}__score.log")
+            sh([SCORER, "scripts/lens_eval.py", "views", "--official-src", OFFICIAL_SRC, "--bench-root", BENCH,
+                "--work-root", WORK, "--tag", t, "--datasets", *DATASETS, "--weights", f"official:{m}",
+                "--out", views_path(t)], f"{LOGS}/{t}__views.log")
+            if not KEEP_EXPORTS:
+                shutil.rmtree(f"{WORK}/workspace/evaluation/{t}", ignore_errors=True)'''),
+    md("### Data: DA3-BENCH subsets (HF `depth-anything/DA3-BENCH`)"),
+    code('''from huggingface_hub import hf_hub_download
+import zipfile
+os.makedirs(BENCH, exist_ok=True)
+if RUN["primary"] or RUN["secondary"]:
+    for d in DATASETS:
+        if not os.path.exists(f"{BENCH}/{d}"):
+            z = hf_hub_download("depth-anything/DA3-BENCH", f"{d}.zip", repo_type="dataset", local_dir="/tmp/zips")
+            zipfile.ZipFile(z).extractall(BENCH); os.remove(z)
+!du -sh {BENCH}/* 2>/dev/null; df -h /tmp | tail -1'''),
+    md("""### 0 · Checks: unit tests (CPU) and gate L0 (GPU)
+`tests/test_lens.py`: exact crop / zoom / resize / pad geometry, intrinsics and depth carried between frames, plans,
+every arm bit-identical to the released adapter when no view is zoomed (tiny random model), records of the new
+protocol kept apart. Then the same parity with the **released weights on the GPU**, plus a zoom sanity check
+(zoomed views fill only the centre of their export, principal point centred, canonical arms put zoomed views on a
+smaller grid). The notebook stops if a check fails."""),
+    code('''if RUN["tests"]:
+    sh([sys.executable, "-m", "pytest", "-q", "tests/test_lens.py", "tests/test_compare.py", "tests/test_foveated.py"],
+       f"{LOGS}/pytest.log")
+if RUN["parity"]:
+    !python scripts/extract_frames.py /kaggle/working/Depth-Anything-3/assets/examples/robot_unitree.mp4 \\
+        /kaggle/working/samples/robot_unitree --frames 8 --start 0.1 --end 0.6
+    for m in MODELS:
+        p = f"{OUT}/parity_{m}.json"
+        if not is_done(p):
+            sh(["python", "scripts/lens_eval.py", "parity", "--weights", f"official:{m}",
+                "--images", "/kaggle/working/samples/robot_unitree", "--views", "8", "--out", p], f"{LOGS}/parity_{m}.log")
+        chk = json.load(open(p))
+        for name, c in chk["checks"].items():
+            print(("PASS " if c["pass"] else "FAIL ") + name)
+        assert chk["all_pass"], f"gate L0 failed for {m}: see {p}"'''),
+    md("""### 1 · Primary protocol: 30% of the views zoomed 2×, five arms, pose + reconstruction
+Released harness (≤ 100 frames per scene, seed 42, evo + RANSAC, TSDF F1), camera-head poses (API default), reference
+view "first" (never zoomed). Each arm writes a standard record (protocol input `lens:zoom=2,fraction=0.3`); the
+per-view analysis (depth-scale ratio zoomed / normal views, pose AUC on zoom–normal pairs, focal ratio, zoom-estimate
+error) reads the exports before they are deleted."""),
+    code('''if RUN["primary"]:
+    for m in MODELS:
+        run_protocol(m, PRIMARY, ARMS, MODES.split())'''),
+    md("""### 2 · Secondary protocols (descriptive, pose only)
+Zoom 1.5× and 3×, and 70% zoomed views (the normal views become a "wide minority": P1 then processes them at up to
+1008 px). Never decide a gate; Bonferroni CIs in the analysis."""),
+    code('''if RUN["secondary"]:
+    for m in MODELS:
+        for prot in SECONDARY:
+            run_protocol(m, prot, SECONDARY_ARMS, ["pose"])'''),
+    md("""### 3 · Results: pre-registered gates, tables, figures, records
+- **L1** the problem exists: DA3 as released has a depth-scale offset between zoomed and normal views (CI of the
+  ratio entirely outside ±5%). FAIL here = DA3 is lens-consistent: P1 stops and that is the (reported) finding.
+- **L2** P1's mechanism removes it (canon_oracle ratio inside ±5%).
+- **L3 (primary endpoint)** deployable P1 improves Sec. 6 AUC@30 over the released DA3 on the mixed-lens set.
+- **L4** the zoom of every view is recovered from DA3 itself within 10%.
+- Descriptive: the padded arm tells H_ang (angular size per patch) from H_grid (token grid) apart."""),
+    code('''if RUN["analyse"]:
+    sh([SCORER, "scripts/lens_eval.py", "analyse", "--out-dir", OUT, "--results-root", RESULTS, "--plan", PLAN],
+       f"{LOGS}/analyse.log")
+from IPython.display import Image, Markdown, display
+if os.path.exists(f"{OUT}/summary.md"):
+    display(Markdown(open(f"{OUT}/summary.md").read()))
+for p in sorted(glob.glob(f"{OUT}/lens_*.png")):
+    print(os.path.basename(p)); display(Image(p, width=1100))'''),
+    code('''!python scripts/compare_results.py --dirs {RESULTS} --out {OUT}/comparison.md > /dev/null
+display(Markdown(open(f"{OUT}/comparison.md").read()))'''),
+    md("""### 4 · Photo demo: the same photos, released DA3 vs P1
+Upload the photos of one static scene as a Kaggle dataset (keep the **original files with EXIF**, not photos sent
+through a messaging app) and set `PHOTOS`. Best shown with a mix of lenses: most photos at 1× (portrait and landscape),
+some at 2–3× of details, some at 0.5× (capture recipe in `docs/LENS.md` §8). Three reconstructions per model:
+**released** (`infer.py` unchanged: centre-crop to one size), **orient** (native aspect ratio only), **lens** (P1: equal
+angular resolution, focal lengths from EXIF or from DA3). Without ground truth: reprojection consistency (GT-free),
+and pose / camera-centre / focal accuracy against COLMAP (pseudo ground truth, classical SfM on the full photos)."""),
+    code('''DEMO = f"{OUT}/demo"
+if RUN["demo"] and PHOTOS:
+    os.makedirs(DEMO, exist_ok=True)
+    cm = ""
+    if COLMAP:
+        try:
+            if not is_done(f"{DEMO}/colmap/colmap_cameras.json"):
+                !pip install -q pycolmap
+                sh(["python", "scripts/colmap_reference.py", "--images", PHOTOS, "--out", f"{DEMO}/colmap"], f"{LOGS}/colmap.log")
+            cm = f"{DEMO}/colmap/colmap_cameras.json"
+        except AssertionError as e:
+            print("COLMAP failed, the demo continues without it:", e)
+    for m in DEMO_MODELS:
+        d = f"{DEMO}/{m}"
+        if not is_done(f"{d}/compare/summary.json"):
+            cmd = ["python", "scripts/lens_demo.py", "--images", PHOTOS, "--out", d, "--weights", f"official:{m}"]
+            if cm and os.path.exists(cm):
+                cmd += ["--colmap", cm]
+            sh(cmd, f"{LOGS}/demo_{m}.log")
+        display(Markdown(open(f"{d}/compare/summary.md").read()))
+        for f in ("depth_compare.png", "ray_compare.png", "cameras_topdown.png"):
+            if os.path.exists(f"{d}/compare/{f}"):
+                print(m, "·", f); display(Image(f"{d}/compare/{f}", width=1100))
+elif RUN["demo"]:
+    print("set PHOTOS to run the photo demo")'''),
+    md("### 5 · Save: download `lens_results.zip`, copy `lens/results/*` into the repo's `experiments/results/`, commit"),
+    code('''!cd /kaggle/working && rm -f lens_results.zip && zip -qr lens_results.zip lens -x "lens/demo/*/released/*" "lens/demo/*/orient/*" "lens/demo/*/lens/*" "lens/demo/colmap/*" && ls -la lens_results.zip
+!ls -la {OUT}/demo/*/*.zip 2>/dev/null   # Blender packages of the photo demo (download separately)
+!find {RESULTS} -name "*.json" | sort'''),
+]
 
 
 NOTEBOOKS = {
@@ -1612,6 +1850,7 @@ for ax, lab in zip(axes, ["AUC@3", "AUC@30", "F1 w/o p."]):
     sec6_delta_bars(recs, lab, ax=ax)
 plt.tight_layout(); plt.show()'''),
     ],
+    "10_lens": LENS_NOTEBOOK,
 }
 
 

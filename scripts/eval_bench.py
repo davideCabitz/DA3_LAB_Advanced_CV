@@ -33,6 +33,11 @@ Enhancement hooks:
   predictions unchanged (enhancement #2 uses it for the uniform-resolution rows).
 * `--foveated SPEC`: enhancement #2, Foveated DA3: mixed per-view resolutions in one pass, e.g.
   "fraction=0.25,focus_res=504,context_res=252[,balance=1]" (da3.enhancements.foveated).
+* `--lens SPEC`: enhancement #4, lens-consistent DA3: the mixed-lens protocol (a share of the views
+  zoomed inside the adapter) and one arm, e.g. "arm=native,zoom=2,fraction=0.3" (DA3 as released on
+  the zoomed set) or "arm=canon_self,zoom=2,fraction=0.3" (da3.enhancements.lens, docs/LENS.md).
+  Unposed modes only. The record's protocol gets input="lens:...", so these runs are only ever
+  compared with runs of the same protocol. Pass the same --lens with --eval-only.
 """
 
 from __future__ import annotations
@@ -128,6 +133,7 @@ def main():
     ap.add_argument("--process-res", type=int, default=504, help="uniform processing resolution (longest side)")
     ap.add_argument("--meter", action="store_true", help="write per-scene efficiency meta (enhancement #2)")
     ap.add_argument("--foveated", default="", help="enhancement #2 spec, e.g. 'fraction=0.25,context_res=252'")
+    ap.add_argument("--lens", default="", help="enhancement #4 spec, e.g. 'arm=canon_self,zoom=2,fraction=0.3'")
     ap.add_argument("--adapter", default=None,
                     help="LoRA adapter (scripts/train_lora.py) on the released --weights; setting 'official+LoRA'")
     ap.add_argument("--notes", default="")
@@ -136,6 +142,19 @@ def main():
         ap.error("--foveated needs --engine ours and cannot be combined with --dump-audit")
     if args.eval_only and args.infer_only:
         ap.error("--eval-only and --infer-only are mutually exclusive")
+    lens_spec = None
+    if args.lens:
+        if args.foveated or args.dump_audit or args.meter or args.adapter or args.engine != "ours":
+            ap.error("--lens needs --engine ours and cannot be combined with --foveated / --dump-audit / --meter / --adapter")
+        if "recon_posed" in args.modes:
+            ap.error("--lens: the mixed-lens protocol is unposed only (modes pose, recon_unposed)")
+        from dataclasses import replace
+
+        from da3.enhancements.lens import LensSpec
+
+        lens_spec = LensSpec.parse(args.lens)
+        if not any(item.strip().startswith("res=") for item in args.lens.split(",")):
+            lens_spec = replace(lens_spec, res=args.process_res)   # the spec's resolution defaults to --process-res
 
     from da3.eval.harness import prepare_workspace
 
@@ -174,7 +193,12 @@ def main():
             from da3.enhancements.self_audit import AuditDumper
 
             dumper = AuditDumper(ray_solver=official_ray_solver, repass=not args.no_repass)
-        if args.foveated:
+        if lens_spec is not None:
+            from da3.enhancements.lens.adapter import LensAPI
+
+            api = LensAPI(model, args.device, spec=lens_spec, use_ray_pose=args.use_ray_pose,
+                          skip_existing=args.skip_existing)
+        elif args.foveated:
             from da3.enhancements.foveated import FoveationSpec
             from da3.enhancements.foveated.adapter import FoveatedAPI
 
@@ -224,7 +248,8 @@ def main():
         "tag": args.tag, "setting": setting, "engine": args.engine, **winfo,
         "datasets": args.datasets, "modes": args.modes, "max_frames": args.max_frames,
         "scenes": scenes or "all", "use_ray_pose": args.use_ray_pose,
-        "process_res": args.process_res, "foveated": args.foveated or None, "efficiency": efficiency,
+        "process_res": args.process_res, "foveated": args.foveated or None,
+        "lens": None if lens_spec is None else lens_spec.to_text(), "efficiency": efficiency,
         "means": {k: v.get("mean") for k, v in metrics.items()},
         "per_scene": metrics, "metric_crosscheck_ours_vs_harness": cc,
         "time_inference_s": t_inf, "time_total_s": t_all,
@@ -245,9 +270,12 @@ def main():
         run_notes.append(f"process_res={args.process_res}")
     if args.foveated:
         run_notes.append(f"foveated: {args.foveated}")
+    if lens_spec is not None:
+        run_notes.append(f"lens: {lens_spec.to_text()}")
     record = make_record(
         enhancement=args.enhancement, variant=variant, tag=args.tag, setting=setting, weights=args.weights,
-        protocol=protocol(args.datasets, scenes or "all", args.max_frames, args.modes, "first"),
+        protocol=protocol(args.datasets, scenes or "all", args.max_frames, args.modes, "first",
+                          input=None if lens_spec is None else lens_spec.protocol_input),
         sec6=summary["means"], sec6_per_scene=metrics, baseline_tag=args.baseline_tag,
         extra={"efficiency": {"all": efficiency}} if efficiency else None,
         commit=summary["commit"], env=summary["env"], notes="; ".join(run_notes), adapter=winfo.get("adapter"),

@@ -156,7 +156,8 @@ def main():
     cams = []
     for i, f in enumerate(meta["frames"]):
         img = os.path.join(d, f["file_path"])
-        cams.append(add_camera(f"DA3_cam_{i:03d}", f, W, H, img, scale))
+        # per-frame size when the views differ (mixed orientations / lenses, enhancement #4)
+        cams.append(add_camera(f"DA3_cam_{i:03d}", f, int(f.get("w", W)), int(f.get("h", H)), img, scale))
     scene = bpy.context.scene
     scene.render.resolution_x, scene.render.resolution_y = W, H
     # A Blender camera has one focal length; fx != fy is modelled with the (per-scene) pixel aspect.

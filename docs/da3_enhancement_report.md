@@ -1,5 +1,10 @@
 # DA3 enhancement report: improving a frozen Depth Anything 3
 
+> **Update 2026-11-26.** The three selected ideas were run: #2 Foveated and #3 LoRA (E3) are no-go by their
+> pre-registered gates, #1 Self-Audit fails gates G2-G4 in its smoke test (full run pending). Their measured findings
+> led to a new enhancement, #4 lens-consistent DA3: [LENS.md](LENS.md) (§1 there explains the route). This report is
+> kept unchanged as the record of the original selection.
+
 **Date:** 2026-11-19.
 **Status:** planning document. No enhancement has been run yet, so every gain below is an **estimate**, not a measurement.
 

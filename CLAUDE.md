@@ -72,6 +72,9 @@ Ideas to explore; each needs an ablation against the reproduced baseline:
 
 Selected on 2026-11-19 by a multi-agent study (frozen DA3; strict novelty rule: anything already published is discarded):
 see [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md) §4–5.
+Update 2026-11-26: #1-#3 failed their gates (their measured findings are kept); the current enhancement is #4,
+lens-consistent DA3 (P1), derived from #2's finding that the depth scale follows the patch footprint:
+[docs/LENS.md](docs/LENS.md). Rule from now on: start from a measured weakness, gate it cheaply, be a no-op elsewhere.
 
 ## Repository layout
 
@@ -85,6 +88,7 @@ see [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md) §4–5.
 - [docs/FOVEATED_ANALYSIS_PLAN.md](docs/FOVEATED_ANALYSIS_PLAN.md): pre-registered statistical analysis plan of enhancement #2 (constants in `configs/foveated_analysis.yaml`; do not edit after results; deviations are logged there).
 - [docs/LORA.md](docs/LORA.md): LoRA platform / enhancement #3 (E3): repository status, expected results, alternatives, how the LoRA works inside DA3, Phase 5 (same photos incl. the fountain set, Blender side by side), open decisions.
 - [docs/LORA_ANALYSIS_PLAN.md](docs/LORA_ANALYSIS_PLAN.md): pre-registered statistics of the LoRA vs the released DA3 (constants in `configs/lora_analysis.yaml`; do not edit after results).
+- [docs/LENS.md](docs/LENS.md): enhancement #4 (P1), lens-consistent DA3, chosen 2026-11-26 after #1-#3 failed their gates: how we got here (failures -> measured findings), the problem (depth scale follows the patch footprint, so mixed-lens photo sets break), hypothesis H_ang vs H_grid, method (equal angular resolution in one pass, native aspect), mixed-lens Sec. 6 protocol, pre-registered gates L0-L4 (`configs/lens_analysis.yaml`; do not edit after results), novelty check, Trento photo demo recipe.
 - [TODO.md](TODO.md): running task list for the phases.
 - `src/da3/`: our implementation (installable with `pip install -e .`).
   - `backbone/`: DINOv2 ViT with within-view / cross-view token reordering, RoPE, QK-norm, camera tokens.
@@ -96,16 +100,16 @@ see [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md) §4–5.
   - `eval/`: pose AUC, RANSAC pose alignment, TSDF fusion, Chamfer / F1, benchmark loaders.
   - `export/`: PLY, transforms.json (NeRF/COLMAP style), GLB.
   - `compare/`: standard result record (`experiments/results/<enhancement>/<tag>.json`, schema `da3-result/1`), comparison tables (differences to the original DA3, only within one protocol: same weights, datasets, scenes, frame sampling) and plots.
-  - `enhancements/`: one sub-package per enhancement of the frozen DA3; `self_audit/` = enhancement #1 (signals, audit model, pose-source choice/fusion, triple-collocation calibration, dump hook for the benchmark adapter); `foveated/` = enhancement #2 (mixed per-view resolution routing, bit-identical to DA3 at equal resolution, attention-mass balancing, focus selection / token budgets, harness adapter, virtual zoom cameras).
+  - `enhancements/`: one sub-package per enhancement of the frozen DA3; `self_audit/` = enhancement #1 (signals, audit model, pose-source choice/fusion, triple-collocation calibration, dump hook for the benchmark adapter); `foveated/` = enhancement #2 (mixed per-view resolution routing, bit-identical to DA3 at equal resolution, attention-mass balancing, focus selection / token budgets, harness adapter, virtual zoom cameras); `lens/` = enhancement #4 (exact crop / zoom / resize affine geometry, angular-resolution plan, `LensAPI` harness adapter with the mixed-lens protocol and 5 arms, per-view metrics, GT-free reprojection consistency; every arm bit-identical to the released adapter when no view is zoomed).
   - `lora.py`: switchable LoRA (inserted by name into backbone blocks 4-11, off = bit-identical, merge/unmerge, adapter-only files tied to the base weights' SHA-256); `lora_train.py` (arm targets, gauge / scale alignment, anchor); `lora_stats.py` (pre-registered tests: sign-flip, cluster bootstrap, Holm, non-inferiority).
   - `data/kitti.py` (KITTI raw calib / OXTS poses / LiDAR depth, Eigen-test leakage guard, drive split) and `eval/clip_metrics.py` (clip-scale AbsRel, ATE / RPE).
   - `model.py`: full DA3 network; `config.py`: model/train configs.
 - `configs/`: YAML configs (model size, resolution, views, pose conditioning, training).
 - `scripts/`: entry points (train, eval, infer, parity, checkpoint conversion, Blender import, Blender turntable video).
 - `tests/`: pytest unit tests (`pytest -q`).
-- `notebooks/`: thin Kaggle notebooks (00_setup, 01_parity, 02_train, 03_eval, 04_demo_export (+ 04_demo_export_colab: the same demo on Google Colab), 05_self_audit (+ 05_self_audit_colab), 06_foveated, 07_lora (+ 07_lora_colab, Drive checkpoints; enhancement #3, parts A-I: checks, KITTI, go/no-go, training, KITTI test, Sec. 6, fountain comparison, analysis), 09_compare_all); all logic stays in `src/` and `scripts/`.
+- `notebooks/`: thin Kaggle notebooks (00_setup, 01_parity, 02_train, 03_eval, 04_demo_export (+ 04_demo_export_colab: the same demo on Google Colab), 05_self_audit (+ 05_self_audit_colab), 06_foveated, 07_lora (+ 07_lora_colab, Drive checkpoints; enhancement #3, parts A-I: checks, KITTI, go/no-go, training, KITTI test, Sec. 6, fountain comparison, analysis), 09_compare_all, 10_lens (enhancement #4: unit tests + GPU parity, mixed-lens Sec. 6 protocol on 2x T4, secondary protocols, gates, photo demo with COLMAP pseudo-GT)); all logic stays in `src/` and `scripts/`. Lens scripts: `scripts/lens_eval.py` (parity / views / analyse), `scripts/lens_demo.py` (released vs orientation-only vs P1 on one photo set), `scripts/colmap_reference.py` (pycolmap pseudo ground truth); `scripts/eval_bench.py --lens SPEC`. Result records may carry `protocol.input` (e.g. "lens:zoom=2,fraction=0.3"); `da3.compare` only pairs records with the same input.
 - `experiments/`: experiment registry (config, seed, commit, metrics per run); `experiments/results/` holds the standard result records (copied from the Kaggle outputs and committed by the user).
-- `reports/`: write-ups (baseline.md, enhancement_1_self_audit.md, enhancement_2_foveated.md, enhancement_3_lora.md).
+- `reports/`: write-ups (baseline.md, enhancement_1_self_audit.md, enhancement_2_foveated.md, enhancement_3_lora.md, enhancement_4_lens.md).
 
 Setting tags for every reported number: **[paper]**, **[official]** (released weights run by us), **[reduced-scale]** (our training).
 
