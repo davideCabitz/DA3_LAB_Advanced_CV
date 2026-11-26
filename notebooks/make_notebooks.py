@@ -363,8 +363,13 @@ if TRAIN_OK:
                 print(f"session time almost used up ({budget:.2f} h left): stopping before {name}; "
                       "save the version and resume (RESUME_FROM)"); break
             assert torch.cuda.is_available(), GPU_MSG
+            # no format spec inside {} on a ! line: IPython evals "budget:.2f" as code, fails, and then
+            # leaves the WHOLE command unexpanded (train_lora.py got the literal '{arm}')
+            budget_h = f"{budget:.2f}"
             !python scripts/train_lora.py --root {CANON} --arm {arm} --seed {seed} --preset {PRESET} \
-                --cache {CACHE} --out {OUT}/runs --resume --time-budget-h {budget:.2f}
+                --cache {CACHE} --out {OUT}/runs --resume --time-budget-h {budget_h}
+            if _exit_code != 0:
+                raise RuntimeError(f"train_lora.py failed for {name} (exit {_exit_code}): see the output above")
             save_checkpoint()
         else:
             continue
