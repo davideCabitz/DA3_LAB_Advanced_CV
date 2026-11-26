@@ -260,15 +260,24 @@ def run_replays(args, scenes, poses, work_root: Path) -> list[str]:
         for k, sc in enumerate(scenes):
             w2c, K = poses[v][k]
             write_variant_exports(sc["exports"], vdir, sc["data"], sc["scene"], w2c, K)
-        cmd = [sys.executable, str(REPO / "scripts" / "eval_bench.py"), "--official-src", args.official_src,
-               "--bench-root", args.bench_root, "--work-root", str(work_root), "--weights", args.weights,
-               "--datasets", *args.datasets, "--modes", *modes, "--max-frames", str(args.max_frames),
-               "--max-scenes", str(args.max_scenes), "--eval-only", "--tag", vtag,
-               "--enhancement", VARIANTS[v], "--variant", v, "--baseline-tag", args.baseline_tag,
-               "--results-root", args.results_root, "--fusion-workers", str(args.fusion_workers),
-               "--notes", f"replay of {args.baseline_tag}: same depth, cameras from '{v}'"]
-        print(f"[self-audit] harness replay: {vtag} ({' + '.join(modes)})")
-        subprocess.run(cmd, check=True, cwd=str(REPO))
+        workers = args.fusion_workers
+        while True:
+            cmd = [sys.executable, str(REPO / "scripts" / "eval_bench.py"), "--official-src", args.official_src,
+                   "--bench-root", args.bench_root, "--work-root", str(work_root), "--weights", args.weights,
+                   "--datasets", *args.datasets, "--modes", *modes, "--max-frames", str(args.max_frames),
+                   "--max-scenes", str(args.max_scenes), "--eval-only", "--tag", vtag,
+                   "--enhancement", VARIANTS[v], "--variant", v, "--baseline-tag", args.baseline_tag,
+                   "--results-root", args.results_root, "--fusion-workers", str(workers),
+                   "--notes", f"replay of {args.baseline_tag}: same depth, cameras from '{v}'"]
+            print(f"[self-audit] harness replay: {vtag} ({' + '.join(modes)}, {workers} fusion workers)")
+            rc = subprocess.run(cmd, cwd=str(REPO)).returncode
+            if rc in (-9, 137) and workers > 1:  # killed: out of RAM (parallel TSDF fusions); fewer workers
+                workers = max(1, workers // 2)  # (the worker count does not change the scores)
+                print(f"[self-audit] replay {vtag} ran out of memory; retrying with {workers} fusion worker(s)")
+                continue
+            if rc != 0:
+                raise subprocess.CalledProcessError(rc, cmd)
+            break
         tags.append(vtag)
         if not args.keep_replay_exports:
             shutil.rmtree(vdir, ignore_errors=True)  # the record (with per-scene metrics) is already saved
@@ -620,13 +629,19 @@ def main():
     c_res = part_c(scenes, args)
     g = gates(table, a_res, b_res, c_res, ec_available)
 
+    files = make_figures(out_dir, table, a_res, c_res, scenes)  # before the replays: kept even if one fails
+    write_csv(out_dir / "per_view.csv", table, a_res, features)
+    files.append("per_view.csv")
+
+    # The replays run the harness (TSDF fusion workers) in a subprocess: free the per-scene depth /
+    # confidence / dump arrays first, they are no longer needed (the replays re-read the exports).
+    scenes = [{k: sc[k] for k in ("data", "scene", "exports")} for sc in scenes]
+    import gc
+
+    gc.collect()
     replay_tags = []
     if not args.skip_sec6:
         replay_tags = run_replays(args, scenes, b_res["poses"], work_root)
-
-    files = make_figures(out_dir, table, a_res, c_res, scenes)
-    write_csv(out_dir / "per_view.csv", table, a_res, features)
-    files.append("per_view.csv")
 
     base = [r for r in load_records(args.results_root) if r["tag"] == args.baseline_tag]
     if base:
