@@ -44,6 +44,13 @@ provide, without retraining anything:
   - Released harness at commit 3d835ec: ≤ 100 frames per scene (seed 42), evo Umeyama + RANSAC,
     TSDF, F1 / Chamfer.
   - Reference view "first", as in the 03_eval baseline.
+- **Scope compared with the paper's Sec. 6:** same metrics (AUC@3, AUC@30, F1) and the same
+  harness, on 3 of the paper's 5 datasets. Not run:
+  - **ETH3D and ScanNet++**: compute budget, see §6;
+  - **reconstruction with GT poses** ("w/ pose" column of Tab. 3): the Self-Audit only changes the
+    predicted cameras, so with GT cameras the result equals the original DA3 by construction;
+  - **full DTU (Chamfer in mm)**: DTU-64 is scored on pose only;
+  - **novel view synthesis and monocular depth**: depth and Gaussians are unchanged.
 - **Per-view GT error:** for view i, the median over the other views j of max(RRA_ij, RTA_ij).
   This is the paper's pairwise definition behind pose AUC. Failure = rotation error > 15° (gross)
   or > 5°.
@@ -158,6 +165,21 @@ calibration gets to the per-scene GT fit._
   errors include that offset. HiRoom (synthetic) is the clean case for C.
 - **Small fitting set.** The audit model is trained on three datasets. It is fitted
   leave-one-dataset-out, so every reported number is out-of-dataset.
+- **3 of the 5 benchmark datasets (ETH3D and ScanNet++ not evaluated), because of compute.**
+  - **Measured cost** on Kaggle (one T4, 4 CPU cores, DA3-Small, full run): ~2.5 h per model for
+    HiRoom + 7Scenes + DTU-64. That is 10 min of model inference, then CPU-bound scoring: 32 min
+    for the original DA3, ~30 min for each of the three reconstruction replays of the Self-Audit
+    variants.
+  - **Cost of the missing datasets:** ETH3D (15 GB) and ScanNet++ (11 GB) do not fit in the same
+    session's disk next to the others. Each would need its own session per model, with the same
+    four reconstruction scorings: at least four more multi-hour T4 sessions for DA3-Small and
+    DA3-Base.
+  - **Why that did not fit:** this was not possible within the project deadline and the weekly
+    Kaggle GPU quota, with long T4 queues on Kaggle and Colab during the project.
+  - **What the omission does and does not mean:** it is a budget decision, not a technical limit.
+    The same notebook runs them unchanged (`DATASETS = ["eth3d"]`, then `["scannetpp"]`). The
+    conclusions hold for HiRoom, 7Scenes and DTU-64; how far they generalise to ETH3D (large
+    outdoor and indoor scenes) and ScanNet++ is untested.
 - **May claim** (not found in the literature, report §3.4):
   - DA3-specific redundancy signals: head-vs-ray gap, ray-origin spread, pinhole residual, E_c
     fixed-point residual;
