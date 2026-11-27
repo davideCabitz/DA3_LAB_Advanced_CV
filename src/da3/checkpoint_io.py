@@ -67,10 +67,23 @@ def load_safetensors(path: str | Path) -> dict:
 
 
 def download_official(preset: str, local_dir: str | Path = "weights") -> Path:
+    """Released weights into <local_dir>/<repo name>/model.safetensors.
+
+    Serialized with a file lock: parallel jobs (one per GPU) share the folder, and two concurrent
+    `hf_hub_download(local_dir=...)` calls race. The second one deletes the file the first one just finished
+    before downloading it again, so the first job gets a FileNotFoundError (seen on Kaggle, notebook 10_lens).
+    Under the lock, the second job finds the finished file and only checks it."""
+    from filelock import FileLock   # a dependency of huggingface_hub
     from huggingface_hub import hf_hub_download
 
     repo = HF_REPOS[preset]
-    return Path(hf_hub_download(repo, "model.safetensors", local_dir=str(Path(local_dir) / repo.split("/")[1])))
+    target = Path(local_dir) / repo.split("/")[1]
+    target.mkdir(parents=True, exist_ok=True)
+    with FileLock(str(target / ".download.lock")):
+        path = Path(hf_hub_download(repo, "model.safetensors", local_dir=str(target)))
+    if not path.is_file():
+        raise FileNotFoundError(f"released weights missing after download: {path}")
+    return path
 
 
 def load_official_into(model: torch.nn.Module, path: str | Path, strict: bool = True) -> dict:
