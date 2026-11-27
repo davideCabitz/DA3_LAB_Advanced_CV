@@ -495,6 +495,12 @@ def setup_render(scene, cam, cfg, out_dir):
 def main():
     cfg = parse_args(dict(CONFIG))
     d = find_dir(cfg)
+    over = os.path.join(d, "turntable.json")
+    if os.path.exists(over):   # per-reconstruction defaults (infer.py --turntable-crop); command-line options still win
+        with open(over, encoding="utf-8") as fh:
+            extra = {k: v for k, v in json.load(fh).items() if k in CONFIG}
+        cfg = parse_args({**CONFIG, **extra})
+        print(f"[turntable] defaults from {over}: {extra}")
     ensure_imported(d)
     scene = bpy.context.scene
     pts = bpy.data.objects["DA3_points"]

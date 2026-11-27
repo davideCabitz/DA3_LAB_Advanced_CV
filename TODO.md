@@ -60,10 +60,20 @@ Top 3 from the multi-agent study (docs/da3_enhancement_report.md §4–5). Run t
       (`src/da3/enhancements/lens/`, `scripts/lens_eval.py`, `scripts/lens_demo.py`, `scripts/colmap_reference.py`,
       `eval_bench.py --lens`, records with `protocol.input`, notebook `10_lens`, tests `tests/test_lens.py`,
       pre-registered plan `configs/lens_analysis.yaml`)
-  - [!] `10_lens` quick check (`MAX_SCENES = 2`): unit tests + GPU parity (gate L0) must pass; send `lens/summary.md`
-  - [!] photo set of the Trento building (capture recipe LENS.md §8, originals with EXIF) as a Kaggle dataset -> `PHOTOS`
-  - [!] `10_lens` full run (`MAX_SCENES = 0`, DA3-Small; DA3-Base if time) -> gates L1-L4
-  - [ ] copy `lens/results/*` into `experiments/results/`, commit; fill reports/enhancement_4_lens.md
+  - [x] `10_lens` full run, DA3-Small (2026-11-27): L0 PASS, L1 PASS (scale ratio 1.893), L2 FAIL (1.168),
+        L3 PASS but negligible (+0.21 AUC@30), L4 FAIL (zoom error 0.47). P1 with the true zoom: +16.0 AUC@30 (padded +19.3).
+        Reports filled: reports/enhancement_4_lens.md, LENS.md §12
+  - [ ] copy `lens/results/*` (from `lens_results.zip`) into `experiments/results/`, commit
+  - [ ] novelty: read the body of arXiv 2611.17903 ("Zoom In, Scale Out", monocular zoom = moving closer) before the slides
+  - [x] plan v2 pre-registered (`configs/lens_analysis_v2.yaml`): Part A padded P1 confirmation, Part B D1 nested detail
+  - [x] D1 implemented: arm `nest_oracle` (`src/da3/enhancements/lens/detail.py`, adapter), detail metric, notebook 10 part 3b
+  - [!] `10_lens` session 3 (plan v2, ~45 min, RESUME_FROM = the v1 output) -> send `lens/v2/summary_v2.md`
+  - [ ] D1 variant: detail pass in DA3's pose-conditioned mode (paper Sec. 3.2), after the v2 gates
+  - [ ] D2: PnPf zoom estimate for unlabeled zoom (gate: L4 criterion)
+  - [ ] photo demo: needs a *zoomed* set (same walk + 2-3x details + some 0.5x, JPG with EXIF); the no-zoom statue set is single-lens
+  - [x] notebook 04: COLMAP cameras for your photos (`CAMERAS = "colmap"`, `infer.py --poses`), `--conf-percentile 60`,
+        `--turntable-crop 1.0` (fix for the collapsed 360-degree statue walk)
+  - [ ] DA3-Base run (optional)
 - [ ] "enhancement experiment" template (config + eval command)
 - [ ] VGGT / Pi3 / DA2 comparisons (not started)
 

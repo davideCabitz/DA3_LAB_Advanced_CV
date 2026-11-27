@@ -75,6 +75,11 @@ see [docs/da3_enhancement_report.md](docs/da3_enhancement_report.md) §4–5.
 Update 2026-11-26: #1-#3 failed their gates (their measured findings are kept); the current enhancement is #4,
 lens-consistent DA3 (P1), derived from #2's finding that the depth scale follows the patch footprint:
 [docs/LENS.md](docs/LENS.md). Rule from now on: start from a measured weakness, gate it cheaply, be a no-op elsewhere.
+Result 2026-11-27 (DA3-Small): the problem is real (zoomed views at depth scale ≈ zoom^0.92; pose AUC@30 79.8 -> 48.9).
+P1 with the true zoom gives +16 AUC@30, but DA3 cannot estimate the zoom itself (L4 FAIL), so the pre-registered deployable
+arm is negligible. The monocular "zoom = moving closer" effect is published (arXiv 2611.17903, cite it). Next step under
+discussion: zoomed photos as detail (LENS.md §13). Implemented 2026-11-27, waiting for Kaggle: plan v2
+(`configs/lens_analysis_v2.yaml`: padded P1 confirmation + D1 nested detail views, arm `nest_oracle`, `lens/detail.py`).
 
 ## Repository layout
 

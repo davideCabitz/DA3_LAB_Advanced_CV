@@ -150,7 +150,7 @@ def _write_images(folder, n=5, h=120, w=160):
     return files
 
 
-@pytest.mark.parametrize("arm", ["unzoomed", "native", "canon_oracle", "canonpad_oracle", "canon_self"])
+@pytest.mark.parametrize("arm", ["unzoomed", "native", "canon_oracle", "canonpad_oracle", "canon_self", "nest_oracle"])
 def test_no_zoomed_view_is_bit_identical_to_the_original_adapter(tmp_path, arm):
     from da3.enhancements.lens.adapter import LensAPI
     from da3.eval.bench_adapter import OursAsOfficialAPI
@@ -190,6 +190,84 @@ def test_zoomed_views_export_and_meta(tmp_path):
             assert len({tuple(h) for h in hw}) == 1                          # one grid for every view
         assert (exp / "exports" / "mini_npz" / "results.npz").exists()
     assert api.summary()["scenes"] == 1
+
+
+def test_padded_arm_with_zoomed_majority_shrinks_into_the_canvas(tmp_path):
+    """Plan v2 runs the padded arm on z2_f70: the widest view is the reference, so nothing has to grow."""
+    from da3.enhancements.lens.adapter import META_FILE, LensAPI
+
+    files = _write_images(tmp_path, n=6)
+    api = LensAPI(tiny_model("da3-small"), "cpu", spec=LensSpec(arm="canonpad_oracle", zoom=2.0, fraction=0.7, res=98, min_res=28))
+    exp = tmp_path / "exp"
+    pred = api.inference(files, export_dir=str(exp))
+    meta = np.load(exp / "exports" / META_FILE)
+    z = meta["kinds"] == KIND_ZOOM
+    assert z.sum() == 4 and pred["depth"].shape == (6, 70, 98)
+    assert np.all(meta["res"][~z] == 98) and np.all(meta["res"][z] == 49)          # normal views define the canvas
+
+
+def test_fit_scale_shift_recovers_scale_and_shift_with_outliers():
+    from da3.enhancements.lens import apply_scale_shift, fit_scale_shift
+
+    rng = np.random.default_rng(0)
+    src = rng.uniform(0.5, 3.0, (60, 80)).astype(np.float32)
+    outlier = rng.random(src.shape) < 0.2                                              # 20% far-off pixels
+    ref = np.where(outlier, rng.uniform(20.0, 30.0, src.shape), 1.9 * src.astype(np.float64) + 0.3)
+    valid = np.ones_like(src, bool)
+    valid[:, :5] = False
+    fit = fit_scale_shift(src, ref, valid=valid)
+    assert fit["mode"] == "scale_shift" and abs(fit["a"] - 1.9) < 1e-3 and abs(fit["b"] - 0.3) < 1e-3
+    assert 0.7 < fit["inliers"] <= 1.0
+    out = apply_scale_shift(np.where(valid, src, 0.0), fit)
+    assert np.all(out[:, :5] == 0) and np.allclose(out[:, 5:], 1.9 * src[:, 5:] + 0.3, rtol=1e-4)
+    assert fit_scale_shift(src[:2, :2], ref[:2, :2])["mode"] == "too_few"
+
+
+def test_nested_detail_arm_keeps_padded_cameras_and_exports_more_pixels(tmp_path):
+    from da3.enhancements.lens.adapter import META_FILE, LensAPI
+
+    files = _write_images(tmp_path, n=6)
+    m = tiny_model("da3-small")
+    pad = LensAPI(m, "cpu", spec=LensSpec(arm="canonpad_oracle", zoom=2.0, fraction=0.5, res=98, min_res=28)).predict(files)
+    api = LensAPI(m, "cpu", spec=LensSpec(arm="nest_oracle", zoom=2.0, fraction=0.5, res=98, min_res=28))
+    exp = tmp_path / "exp"
+    pred = api.inference(files, export_dir=str(exp))
+    meta = np.load(exp / "exports" / META_FILE)
+    z = meta["kinds"] == KIND_ZOOM
+    assert np.array_equal(pred["extrinsics"], pad["extrinsics"])                  # cameras: the padded pass's
+    h, w = pred["depth"].shape[1:]
+    assert max(h, w) > 98 and max(h, w) <= 160 + 14                               # res x zoom, capped at the original
+    assert int(meta["passes"]) == 2 and np.isfinite(meta["detail_a"][z]).all() and np.isnan(meta["detail_a"][~z]).all()
+    d = pred["depth"]
+    assert np.all(d[z][:, : h // 8] == 0) and np.all(d[z][:, :, : w // 8] == 0)  # zoomed views: only their crop
+    assert np.all(d[z][:, 3 * h // 8: 5 * h // 8, 3 * w // 8: 5 * w // 8] > 0) and np.all(d[~z] > 0)
+    # intrinsics follow the export size: the same cameras as the padded arm, rescaled
+    sx = w / pad["depth"].shape[2]
+    assert np.allclose(pred["intrinsics"][:, 0, 0], pad["intrinsics"][:, 0, 0] * sx, rtol=0.03)
+
+
+def test_detail_metrics_are_scale_free_and_see_lost_detail():
+    import cv2
+
+    from da3.enhancements.lens.metrics import detail_metrics
+
+    yy, xx = np.mgrid[0:120, 0:160]
+    gt = (2.0 + 0.5 * np.sin(xx / 3.0) * np.cos(yy / 4.0)).astype(np.float32)      # fine structure
+    same = detail_metrics(3.0 * gt, gt)
+    assert same["abs_rel"] < 1e-6 and same["grad"] < 1e-6 and same["n"] > 1000
+    coarse = cv2.resize(cv2.resize(gt, (40, 30), interpolation=cv2.INTER_AREA), (160, 120), interpolation=cv2.INTER_NEAREST)
+    lost = detail_metrics(coarse, gt)
+    assert lost["grad"] > 10 * max(same["grad"], 1e-6) and lost["abs_rel"] > 0
+    fp = np.zeros_like(gt, bool)
+    fp[40:80, 50:110] = True
+    assert detail_metrics(3.0 * gt, gt, footprint=fp)["n"] <= fp.sum()
+
+
+def test_spec_export_res_roundtrip():
+    s = LensSpec.parse("arm=nest_oracle,zoom=3,fraction=0.3,export_res=1200")
+    assert s.export_res == 1200 and LensSpec.parse(s.to_text()) == s and s.protocol_id == "z3_f30"
+    with pytest.raises(ValueError):
+        LensSpec.parse("arm=nest_oracle,export_res=-1")
 
 
 def test_posed_mode_is_rejected(tmp_path):

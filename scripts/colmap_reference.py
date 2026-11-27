@@ -13,6 +13,10 @@ pixels of the *oriented original* image.
 
 Output: <out>/colmap_cameras.json {"images": {name: {"K", "w2c", "hw"}}, "registered", "total",
 "pycolmap"}, plus the COLMAP database and sparse model.
+
+`--poses-out poses.json` also writes the registered cameras in the format of `scripts/infer.py --poses`
+({"frames": [{"file", "K", "w2c"}]}): classical SfM cameras + DA3 depth for the photo demo (notebook 04).
+Photos COLMAP could not register are left out (infer.py then skips them).
 """
 
 from __future__ import annotations
@@ -100,16 +104,31 @@ def run(images: Path, out: Path, max_size: int = 1600, matcher: str = "exhaustiv
     return res
 
 
+def write_poses(res: dict, path: Path) -> int:
+    """colmap_cameras.json content -> poses.json of scripts/infer.py --poses (K in pixels of the oriented
+    original photo, OpenCV world-to-camera 3x4). Returns the number of cameras written."""
+    frames = [{"file": name, "K": cam["K"], "w2c": cam["w2c"]} for name, cam in sorted(res["images"].items())]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"frames": frames, "source": "COLMAP (pycolmap incremental SfM)",
+                                "registered": res["registered"], "total": res["total"]}, indent=1))
+    missing = res["total"] - res["registered"]
+    print(f"[colmap] poses for {len(frames)} photos -> {path}" + (f" ({missing} not registered: skipped)" if missing else ""))
+    return len(frames)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--images", required=True)
     ap.add_argument("--out", required=True)
     ap.add_argument("--max-size", type=int, default=1600)
     ap.add_argument("--matcher", choices=["exhaustive", "sequential"], default="exhaustive")
+    ap.add_argument("--poses-out", default="", help="also write poses.json for scripts/infer.py --poses")
     args = ap.parse_args()
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    run(Path(args.images), out, args.max_size, args.matcher)
+    res = run(Path(args.images), out, args.max_size, args.matcher)
+    if args.poses_out:
+        write_poses(res, Path(args.poses_out))
 
 
 if __name__ == "__main__":

@@ -40,9 +40,9 @@ PLAN = REPO / "configs" / "lens_analysis.yaml"
 NAMES = {"hiroom": "HiRoom", "7scenes": "7Scenes", "dtu64": "DTU-64", "eth3d": "ETH3D", "dtu": "DTU",
          "scannetpp": "ScanNet++", "all": "All"}
 ARM_LABELS = {"unzoomed": "unzoomed (ceiling, no zoom)", "native": "DA3 as released (one grid)",
-              "canon_oracle": "P1, true zoom", "canonpad_oracle": "P1 padded (diagnostic)",
-              "canon_self": "P1, zoom from DA3 itself"}
-ARM_ORDER = ["unzoomed", "native", "canon_oracle", "canonpad_oracle", "canon_self"]
+              "canon_oracle": "P1, true zoom", "canonpad_oracle": "P1 padded",
+              "canon_self": "P1, zoom from DA3 itself", "nest_oracle": "D1 nested detail (padded + zoomed views at native res)"}
+ARM_ORDER = ["unzoomed", "native", "canon_oracle", "canonpad_oracle", "nest_oracle", "canon_self"]
 
 
 def jdump(obj, path):
@@ -120,7 +120,7 @@ def cmd_parity(args):
         print(f"[parity] {arm}: bit-identical={exact} passes={meta['passes']} {diffs}")
 
     # zoom sanity (released weights, half the views zoomed 2x)
-    for arm in ("native", "canon_oracle"):
+    for arm in ("native", "canon_oracle", "nest_oracle"):
         api = LensAPI(model, device, spec=LensSpec(arm=arm, zoom=2.0, fraction=0.5, res=args.res))
         r = api.run(originals)
         pred, meta = r["pred"], r["meta"]
@@ -138,11 +138,22 @@ def cmd_parity(args):
             smaller = bool(np.all(hw[z].prod(1) < hw[~z].prod(1).min()))
             ok &= smaller
             detail["zoomed_views_on_smaller_grid"] = smaller
+        if arm == "nest_oracle":
+            # D1: cameras are the padded pass's (bit-identical), exports are larger, every zoomed view got a fit
+            pad = LensAPI(model, device, spec=LensSpec(arm="canonpad_oracle", zoom=2.0, fraction=0.5, res=args.res)).run(originals)
+            same = bool(np.array_equal(pad["pred"]["extrinsics"], pred["extrinsics"]))
+            a = np.asarray(meta["detail_a"], np.float64)[z]
+            larger = bool(max(h, w) > max(pad["pred"]["depth"].shape[1:]))
+            ok &= same and larger and bool(np.isfinite(a).all())
+            detail.update({"same_cameras_as_padded": same, "export_hw": [int(h), int(w)], "larger_export": larger,
+                           "detail_scale_a": np.round(a, 4).tolist(),
+                           "detail_inliers": np.round(np.asarray(meta["detail_inliers"], np.float64)[z], 3).tolist()})
         detail["focal_ratio_zoom_over_normal"] = float(np.median(pred["intrinsics"][z, 0, 0]) /
                                                        np.median(pred["intrinsics"][~z, 0, 0]))
         checks[f"zoom sanity, arm {arm}"] = {"pass": ok, **detail,
                                             "criterion": "zoomed views: export border 0, centre valid, principal "
-                                                         "point centred (< 1 px); canon_oracle: smaller grid"}
+                                                         "point centred (< 1 px); canon_oracle: smaller grid; "
+                                                         "nest_oracle: padded cameras, larger export, a fit per zoomed view"}
         print(f"[parity] zoom sanity {arm}: {'PASS' if ok else 'FAIL'} {detail}")
     all_pass = all(c["pass"] for c in checks.values())
     jdump({"weights": args.weights, "device": str(device), "views": len(files), "res": args.res,
@@ -152,9 +163,9 @@ def cmd_parity(args):
 
 # ============================================================================= views (CPU)
 def cmd_views(args):
-    from da3.enhancements.lens import LensSpec
+    from da3.enhancements.lens import KIND_ZOOM, LensSpec
     from da3.enhancements.lens.adapter import META_FILE
-    from da3.enhancements.lens.metrics import scene_view_metrics
+    from da3.enhancements.lens.metrics import detail_metrics, scene_view_metrics
     from da3.eval.gt_depth import GT_DEPTH_DATASETS, gt_depth_index, read_gt_depth
     from da3.eval.harness import evaluation_dir, load_scene_exports, prepare_workspace, unposed_scenes
 
@@ -184,6 +195,21 @@ def cmd_views(args):
                     e = index.get(str(f))
                     gts.append(read_gt_depth(data, e[0], e[1], shape=e[2], hw=hw) if e else None)
             row = scene_view_metrics(sc["results"], sc["gt_extrinsics"], sc["gt_intrinsics"], meta, gts)
+            if data in GT_DEPTH_DATASETS:   # D1: detail of the zoomed views at the GT resolution (LENS.md §13)
+                zs = np.flatnonzero(np.asarray(meta["kinds"]) == KIND_ZOOM)
+                dets = []
+                for s in zs:
+                    e = index.get(str(sc["image_files"][s]))
+                    g = read_gt_depth(data, e[0], e[1], shape=e[2]) if e else None
+                    if g is not None and g.size:
+                        dets.append(detail_metrics(sc["results"]["depth"][s], g))
+                if dets:
+                    row["detail_abs_rel_zoom"] = float(np.nanmean([d["abs_rel"] for d in dets]))
+                    row["detail_grad_zoom"] = float(np.nanmean([d["grad"] for d in dets]))
+                    sres = LensSpec.parse(str(meta["spec"])).res
+                    orig, zf = np.asarray(meta["orig_hw"]), np.asarray(meta["zoom"], np.float64)
+                    # a zoomed crop holds real extra pixels only if the original is at least zoom x res wide
+                    row["detail_real"] = bool(all(orig[s].max() >= zf[s] * sres - 1 for s in zs))
             row.update({"data": data, "scene": scene, "passes": int(meta["passes"]), "tokens": int(meta["tokens"]),
                         "time_s": float(meta["time_s"]), "res": np.asarray(meta["res"]).tolist(),
                         "view_hw": np.asarray(meta["view_hw"]).tolist()})
@@ -247,6 +273,8 @@ def scene_table(views, records_by_tag) -> dict:
             "z_err_zoom_views": z[kinds == 1] if len(z) else np.zeros(0),
             "f1": 100 * _f1(records_by_tag, views["tag"], r["data"], r["scene"]),
             "passes": float(r.get("passes", 1)), "tokens": float(r.get("tokens", np.nan)), "time_s": float(r.get("time_s", np.nan)),
+            "detail_abs_rel_zoom": _get(r, "detail_abs_rel_zoom"), "detail_grad_zoom": _get(r, "detail_grad_zoom"),
+            "detail_real": bool(r.get("detail_real", False)),
         }
     return out
 
@@ -289,7 +317,8 @@ def analyse_group(arms: dict, plan: dict, level: float) -> dict:
     common = sorted(set.intersection(*[set(t) for t in arms.values()])) if arms else []
     res = {"scenes": [list(k) for k in common], "arms": {}, "diff_vs_native": {}}
     metrics = ["auc03", "auc30", "auc30_cross", "auc30_cross_rot", "auc30_cross_trans", "auc30_normal",
-               "f1", "abs_rel_scene", "focal_ratio_zoom", "passes", "tokens", "time_s"]
+               "f1", "abs_rel_scene", "focal_ratio_zoom", "passes", "tokens", "time_s",
+               "detail_grad_zoom", "detail_abs_rel_zoom"]
     datasets = sorted({k[0] for k in common})
     for arm, tab in arms.items():
         a = {}
@@ -334,7 +363,7 @@ def analyse_group(arms: dict, plan: dict, level: float) -> dict:
         g["L3 PRIMARY: canon_self - native, AUC@30 (points)"] = {
             "result": above(ci[1:], float(plan["auc_threshold"])), "value": fmt_ci(*ci, d=2),
             "criterion": f"CI of the paired mean difference > {plan['auc_threshold']}"}
-    if "canon_self" in res["arms"]:
+    if "canon_self" in res["arms"] and "L4" in plan.get("gates", {}):
         ci = res["arms"]["canon_self"]["z_err_zoom"]
         thr = float(plan["gates"]["L4"]["threshold"])
         g["L4 zoom estimated from DA3 (median relative error, zoomed views)"] = {
@@ -363,12 +392,94 @@ def analyse_group(arms: dict, plan: dict, level: float) -> dict:
     return res
 
 
+def plan_v2_gates(pid: str, tabs: dict, plan: dict) -> dict:
+    """Gates of plan v2 (configs/lens_analysis_v2.yaml) for one protocol: Part A (padded P1 confirmed: V1-V3) on
+    the confirmation protocols, Part B (D1 nested detail: D1a-D1c) on the D1 protocols. {} elsewhere."""
+    from da3.enhancements.foveated.stats import NA, above, at_most, bonferroni_level, mean_difference
+
+    n, seed = int(plan["bootstrap"]["n"]), int(plan["bootstrap"]["seed"])
+    band = float(plan["scale_band"])
+    common = sorted(set.intersection(*[set(t) for t in tabs.values()])) if tabs else []
+    g = {}
+
+    def diff(test, ref, m, scenes, level):
+        t = np.array([tabs[test][k][m] for k in scenes], np.float64)
+        r = np.array([tabs[ref][k][m] for k in scenes], np.float64)
+        ok = np.isfinite(t) & np.isfinite(r)
+        if ok.sum() < 2:
+            return (float("nan"),) * 3, int(ok.sum())
+        return mean_difference(t[ok], r[ok], n=n, seed=seed, level=level), int(ok.sum())
+
+    conf = plan.get("confirm", {})
+    if pid in conf.get("protocols", []):
+        level = bonferroni_level(float(plan["ci_level"]), len(conf["protocols"]))
+        thr = float(plan["auc_threshold"])
+        for name, ref, crit in (("V1 padded P1 beats DA3 as released (Δ AUC@30)", "native", "native"),
+                                ("V2 padded P1 beats unpadded P1 (Δ AUC@30)", "canon_oracle", "canon_oracle")):
+            if "canonpad_oracle" in tabs and ref in tabs:
+                ci, m = diff("canonpad_oracle", ref, "auc30", common, level)
+                g[name] = {"result": above(ci[1:], thr), "value": fmt_ci(*ci, d=2),
+                           "criterion": f"{100 * level:.1f}% CI of canonpad_oracle - {crit} > {thr} ({m} scenes)"}
+        if "canonpad_oracle" in tabs:
+            sr = [tabs["canonpad_oracle"][k]["scale_ratio"] for k in common if np.isfinite(tabs["canonpad_oracle"][k]["scale_ratio"])]
+            ci = geo_mean_ci(sr, n, seed, level) if len(sr) >= 2 else (float("nan"),) * 3
+            g["V3 padded P1 depth scale consistent (ratio inside the band)"] = {
+                "result": band_decision(ci[1:], band, want_inside=True), "value": fmt_ci(*ci),
+                "criterion": f"{100 * level:.1f}% CI inside [{1 / (1 + band):.3f}, {1 + band:.3f}]"}
+    d1 = plan.get("d1", {})
+    if pid in d1.get("protocols", []) and "nest_oracle" in tabs and "canonpad_oracle" in tabs:
+        level = bonferroni_level(float(plan["ci_level"]), len(d1["protocols"]))
+        real = [k for k in common if tabs["nest_oracle"][k].get("detail_real")] if d1.get("real_detail_only", True) else common
+        ci, m = diff("nest_oracle", "canonpad_oracle", "detail_grad_zoom", real, level)
+        g["D1a zoomed views gain fine structure (Δ log-depth gradient error < 0)"] = {
+            "result": above((-ci[2], -ci[1]), 0.0) if np.isfinite(ci[0]) else NA, "value": fmt_ci(*ci, d=4),
+            "criterion": f"{100 * level:.1f}% CI of nest - padded < 0 ({m} scenes with real extra pixels)"}
+        margin = float(d1["gates"]["D1b"].get("margin", 0.01))
+        ci, m = diff("nest_oracle", "canonpad_oracle", "detail_abs_rel_zoom", real, level)
+        g["D1b zoomed views not less accurate (Δ AbsRel <= margin)"] = {
+            "result": at_most(ci[1:], margin) if np.isfinite(ci[0]) else NA, "value": fmt_ci(*ci, d=4),
+            "criterion": f"{100 * level:.1f}% CI upper bound <= {margin} ({m} scenes)"}
+        t = np.array([tabs["nest_oracle"][k]["auc30"] for k in common])
+        r = np.array([tabs["canonpad_oracle"][k]["auc30"] for k in common])
+        tol = float(d1["gates"]["D1c"].get("tolerance", 0.05))
+        same = bool(np.allclose(t, r, rtol=0.0, atol=tol, equal_nan=True))
+        dmax = float(np.nanmax(np.abs(t - r))) if len(t) and np.isfinite(t - r).any() else 0.0
+        g["D1c construction check: cameras unchanged (AUC@30 identical)"] = {
+            "result": "PASS" if same else "FAIL", "value": f"max |Δ| = {dmax:.3f} points",
+            "criterion": f"the cameras are the padded pass's: |Δ AUC@30| <= {tol} per scene"}
+    return g
+
+
+def plan_v2_decisions(results: dict, plan: dict) -> dict:
+    """Overall decisions of plan v2 from the per-protocol gates."""
+    from da3.enhancements.foveated.stats import combine_and
+
+    out = {}
+    for model in sorted({k.split("|")[0] for k in results}):
+        def res(prefix, protocols):
+            return [v["result"] for p in protocols for name, v in results.get(f"{model}|{p}", {}).get("gates", {}).items()
+                    if name.startswith(prefix)]
+        cp = plan.get("confirm", {}).get("protocols", [])
+        dp = plan.get("d1", {}).get("protocols", [])
+        out[model] = {
+            "padded P1 confirmed (V1 and V2 PASS on every confirmation protocol)":
+                combine_and(*(res("V1", cp) + res("V2", cp))) if res("V1", cp) else "n.a.",
+            "H_ang (V3) per protocol": {p: next((v["result"] for n_, v in results.get(f"{model}|{p}", {}).get("gates", {}).items()
+                                                if n_.startswith("V3")), "n.a.") for p in cp},
+            "D1 adds detail (D1a and D1b PASS on every D1 protocol, D1c holds)":
+                combine_and(*(res("D1a", dp) + res("D1b", dp) + res("D1c", dp))) if res("D1a", dp) else "n.a.",
+        }
+    return out
+
+
 def cmd_analyse(args):
     from da3.compare import load_records, make_record, protocol, save_record
     from da3.enhancements.foveated.stats import bonferroni_level
 
     absolutise(args, "out_dir", "results_root", "plan")
     plan = load_plan(args.plan)
+    version = int(plan.get("version", 1))
+    sfx = str(plan.get("output_suffix", "")) if version >= 2 else ""
     out_dir = Path(args.out_dir)
     views = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(out_dir.glob("views_*.json"))]
     if not views:
@@ -381,28 +492,42 @@ def cmd_analyse(args):
     secondary = [g for g in groups if g[1] != plan["primary_protocol"]]
     level_sec = bonferroni_level(float(plan["ci_level"]), max(1, len({g[1] for g in secondary})))
     results, lines = {}, []
-    lines.append("# Enhancement #4 · lens-consistent DA3: mixed-lens Sec. 6 protocol\n")
+    lines.append(f"# Enhancement #4 · lens-consistent DA3: mixed-lens Sec. 6 protocol{' · plan v' + str(version) if version >= 2 else ''}\n")
     lines.append(f"Plan `{Path(plan['path']).name}` SHA-256 `{plan['sha256'][:12]}`; primary protocol "
                  f"`{plan['primary_protocol']}` (95% scene-bootstrap CIs); secondary protocols descriptive "
                  f"(Bonferroni {100 * level_sec:.1f}% CIs). Setting [official]: released weights, network unchanged.\n")
+    if version >= 2:
+        lines.append("Plan v2 gates: Part A (padded P1 confirmed: V1-V3) on the confirmation protocols, Part B (D1 nested "
+                     "detail views: D1a-D1c) on the D1 protocols, each with its own Bonferroni CIs; the v1 gates are not "
+                     "decided again.\n")
     for (model, pid), arms in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][1] != plan["primary_protocol"], kv[0][1])):
         primary = pid == plan["primary_protocol"]
         level = float(plan["ci_level"]) if primary else level_sec
         tabs = {arm: scene_table(v, by_tag) for arm, v in arms.items()}
         res = analyse_group(tabs, plan, level)
-        if not primary:
+        if version >= 2:
+            res["gates"] = plan_v2_gates(pid, tabs, plan)
+        elif not primary:
             res["gates"] = {}   # secondary protocols never decide a gate
         res["protocol_input"] = next(iter(arms.values()))["protocol_input"]
         res["tags"] = {arm: v["tag"] for arm, v in arms.items()}
         results[f"{model}|{pid}"] = res
         lines += group_markdown(model, pid, primary, res, level)
-    jdump({"plan": plan["path"], "plan_sha256": plan["sha256"], "results": results}, out_dir / "analysis.json")
+    jdump({"plan": plan["path"], "plan_sha256": plan["sha256"], "results": results}, out_dir / f"analysis{sfx}.json")
     gates = {k: v["gates"] for k, v in results.items() if v["gates"]}
-    jdump(gates, out_dir / "gates.json")
-    (out_dir / "summary.md").write_text("\n".join(lines), encoding="utf-8")
-    print("wrote", out_dir / "summary.md")
+    if version >= 2:
+        decisions = plan_v2_decisions(results, plan)
+        gates["decisions"] = decisions
+        lines.append("\n## Plan v2 decisions\n")
+        for model, d in decisions.items():
+            for name, v in d.items():
+                lines.append(f"- **{model}** · {name}: **{v}**" if not isinstance(v, dict) else
+                             f"- **{model}** · {name}: " + ", ".join(f"{p} **{r}**" for p, r in v.items()))
+    jdump(gates, out_dir / f"gates{sfx}.json")
+    (out_dir / f"summary{sfx}.md").write_text("\n".join(lines), encoding="utf-8")
+    print("wrote", out_dir / f"summary{sfx}.md")
     try:
-        figure(results, out_dir, plan)
+        figure(results, out_dir, plan, suffix=sfx)
     except Exception as e:   # figures are a convenience; the numbers are in the JSON / markdown
         print("[analyse] figure failed:", repr(e))
 
@@ -420,13 +545,20 @@ def cmd_analyse(args):
             extra[f"arm_{arm}"] = {"all": {m: (v[0] if isinstance(v, (tuple, list)) else v) for m, v in a.items()}}
         for arm, d in res["diff_vs_native"].items():
             extra[f"diff_{arm}_vs_native"] = {"all": {m: v[0] for m, v in d.items()}}
-        rec = make_record(enhancement="lens", variant=f"analysis_{pid}", tag=f"lens_{model}_{pid}__analysis",
+        rec = make_record(enhancement="lens", variant=f"analysis_{pid}{sfx}", tag=f"lens_{model}_{pid}__analysis{sfx}",
                           setting="official", weights=f"official:{model}", protocol=prot, extra=extra,
                           baseline_tag=ref_tag, commit=git_commit(REPO), env=environment_info(),
-                          notes=f"plan {plan['sha256'][:12]}; {'primary' if pid == plan['primary_protocol'] else 'secondary'} protocol",
-                          files=["summary.md", "analysis.json", "gates.json", f"lens_{model}.png"])
-        print("record:", save_record(rec, args.results_root))
+                          notes=f"plan v{version} {plan['sha256'][:12]}; "
+                                f"{'primary' if pid == plan['primary_protocol'] else 'secondary'} protocol",
+                          files=[f"summary{sfx}.md", f"analysis{sfx}.json", f"gates{sfx}.json", f"lens_{model}{sfx}.png"])
+        if args.results_root:
+            print("record:", save_record(rec, args.results_root))
     for k, g in gates.items():
+        if k == "decisions":
+            for model, d in g.items():
+                for name, v in d.items():
+                    print(f"{model} · DECISION {name}: {v}")
+            continue
         for name, v in g.items():
             print(f"{k} · {v['result']:12s} {name}: {v['value']}")
 
@@ -435,7 +567,8 @@ def group_markdown(model, pid, primary, res, level) -> list:
     L = [f"\n## {model} · protocol `{pid}` ({res['protocol_input']}) · {'PRIMARY' if primary else 'secondary'} · "
          f"{len(res['scenes'])} paired scenes\n"]
     head = ["Arm", "AUC@3", "AUC@30", "AUC@30 zoom–normal", "… rotation only", "… translation only", "F1 w/o p.",
-            "depth-scale ratio zoom / normal", "focal ratio (zoomed)", "zoom-estimate error", "passes", "tokens", "time (s)"]
+            "depth-scale ratio zoom / normal", "focal ratio (zoomed)", "zoom-estimate error", "detail: log-grad err (zoomed)",
+            "detail: AbsRel (zoomed)", "passes", "tokens", "time (s)"]
     L.append("| " + " | ".join(head) + " |")
     L.append("|" + "---|" * len(head))
     for arm in [a for a in ARM_ORDER if a in res["arms"]]:
@@ -455,6 +588,7 @@ def group_markdown(model, pid, primary, res, level) -> list:
             f"{a['auc30_cross_rot'][0]:.1f}" if np.isfinite(a['auc30_cross_rot'][0]) else "–",
             f"{a['auc30_cross_trans'][0]:.1f}" if np.isfinite(a['auc30_cross_trans'][0]) else "–",
             cell("f1"), fmt_ci(*a["scale_ratio"]), fmt_ci(*a["focal_ratio_zoom"]), fmt_ci(*a["z_err_zoom"]),
+            fmt_ci(*a["detail_grad_zoom"], d=4), fmt_ci(*a["detail_abs_rel_zoom"], d=4),
             f"{a['passes'][0]:.2f}", f"{a['tokens'][0]:.0f}", f"{a['time_s'][0]:.2f}"]) + " |")
     L.append("\nIn brackets: paired difference to DA3 as released on the same zoomed set (arm native). "
              "Depth-scale ratio > 1: zoomed views predicted too close relative to the normal views.\n")
@@ -475,7 +609,7 @@ def group_markdown(model, pid, primary, res, level) -> list:
     return L
 
 
-def figure(results, out_dir, plan):
+def figure(results, out_dir, plan, suffix: str = ""):
     import matplotlib
 
     matplotlib.use("Agg")
@@ -524,7 +658,7 @@ def figure(results, out_dir, plan):
         ax.set_ylabel("AUC@30 (solid: all pairs, hatched: zoom–normal pairs)")
         ax.set_title("Sec. 6 pose accuracy on the mixed-lens set")
         plt.tight_layout()
-        p = out_dir / f"lens_{model}.png"
+        p = out_dir / f"lens_{model}{suffix}.png"
         fig.savefig(p, dpi=130)
         plt.close(fig)
         print("wrote", p)

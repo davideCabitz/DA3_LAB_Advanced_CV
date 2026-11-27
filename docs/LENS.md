@@ -1,9 +1,14 @@
 # Enhancement #4: lens-consistent DA3 (photo sets with mixed zoom, lenses and orientations)
 
-**Status (2026-11-26): implemented, waiting for the Kaggle run** (notebook `10_lens`). Training-free, on the released
-weights (setting **[official]**). Results go to [reports/enhancement_4_lens.md](../reports/enhancement_4_lens.md);
-how to run: [ENHANCEMENTS_RUNBOOK.md](ENHANCEMENTS_RUNBOOK.md) §3c. Statistics pre-registered in
-`configs/lens_analysis.yaml` (§6), fixed before any run.
+**Status (2026-11-27): full run done (DA3-Small, all 50 scenes, 4 protocols); results in §12.** Gates: L1 PASS
+(the problem exists, and it is large), L2 FAIL, L3 PASS but negligible (+0.21 AUC@30), L4 FAIL. P1 with the
+**true** zoom recovers about half of the pose accuracy lost to zoom (+16.0 AUC@30). The self-estimated version does
+nothing, because DA3's camera head barely sees zoom. Next step under discussion: §13 (zoomed photos as *detail*).
+Novelty update: the zoom = "moving closer" effect was published for *monocular* depth two weeks before our run (§7).
+
+Training-free, on the released weights (setting **[official]**). Write-up:
+[reports/enhancement_4_lens.md](../reports/enhancement_4_lens.md). How to run: [ENHANCEMENTS_RUNBOOK.md](ENHANCEMENTS_RUNBOOK.md)
+§3c. Statistics pre-registered in `configs/lens_analysis.yaml` (§6), fixed before any run.
 
 ---
 
@@ -158,6 +163,20 @@ TSDF fusion and F1 thresholds, same GT.
   Fisheye3R); the mixed-resolution routing is our enhancement #2; token pruning / merging (Spark3R) if efficiency comes up.
 - Risk signal: 2512.11508 suggests VGGT copes with different focal lengths; L1 decides for DA3 in one GPU-hour.
 
+**Update 2026-11-27 (after the run; searched again, abstract level):**
+
+| Work | What it covers | Consequence for us |
+|---|---|---|
+| **"Zoom In, Scale Out: Metric Depth Models Mistake Digital Zoom for Moving Closer"** (Noor and Arifin, arXiv 2611.17903, 13 Nov 2026) | *Monocular* metric depth (Depth Anything V2, Depth Pro, DA3-Nested), digital zoom s: depth ∝ s^(−α), α = 0.95 for DA V2, ≈ 0.31–0.36 for models that predict the camera, ≈ 0 when the true camera is given; the focal estimate under-reacts to zoom; a training-free correction; label-free self-consistency fine-tuning ("blurry means zoomed" shortcut) | The **phenomenon** (zoom read as moving closer; camera estimate blind to zoom) is published for single images. **Cite it; do not claim it.** |
+| HD-VGGT (2603.27222), ReDT (2610.25517), URGT "Any Resolution Any Geometry" (2603.03026) | High-resolution feed-forward geometry: a high-resolution branch, resolution-decoupled attention, high-res patches with coarse priors (monocular) | Relevant to §13 (detail): high-resolution *inputs* of the same views, not zoomed photos |
+| Pow3R (CVPR 2025), MapAnything (2509.13414) | Feed-forward reconstruction with **optional known intrinsics** as input (trained) | "Give the model the focal length" is published; §13 must not claim it |
+
+What remains ours: the effect *inside a multi-view reconstruction* (zoomed views pull their cameras along the viewing
+axis: translation AUC@30 81 → 19; depth scale ∝ zoom^0.92 across views of one pass); the mixed-lens Sec. 6
+protocol; training-free equal-angular-resolution inference in one multi-view pass; and the padded diagnostic
+(equal angular resolution on the full canvas gives a consistent scale and focal length). The monocular paper does not
+address multi-view sets, poses or fusion (as far as its abstract shows; re-check its body before the slides).
+
 ## 8. Photo demo (a building in Trento)
 
 **Capture recipe** (what lets P1 show; keep the original files with EXIF: no messaging apps):
@@ -196,6 +215,8 @@ Each is an `infer.py`-style folder (depth / ray maps, cameras, PLY, GLB, transfo
 - **A/A caveat from #2:** the reference view affects DA3 by 3-4%; the reference is always view 0 (never zoomed), the same
   in every arm.
 - **Not evaluated:** ETH3D, ScanNet++ (compute budget, as for #1-#3), NVS, monocular depth (unchanged by construction).
+- **After the run:** F1 exists only for unzoomed / native / canon_self (§10). DA3-Base was not run. The zoom-error of
+  `z2_f70` is not meaningful: with zoomed views in the majority, they are the reference.
 
 ## 10. Deviations log
 
@@ -216,6 +237,12 @@ before the affected results are read. `configs/lens_analysis.yaml` is unchanged.
   Seen before this change: the parity output and the last lines of the two finished scoring logs (7Scenes F1 of
   `unzoomed` and `native`, descriptive). No gate quantity (scale ratio, AUC@30, zoom error) was read. The change is
   driven by RAM and time, not by those numbers.
+- **2026-11-27, plan v2 (`configs/lens_analysis_v2.yaml`, fixed after the v1 results, before any v2 run).** v1 is
+  closed as reported in §12. v2 asks two new questions (§13): Part A confirms padded P1 on the three protocols where
+  the padded arm never ran; Part B gates D1 (`nest_oracle`). Code change: the padded arms now always take the
+  **widest** view as the reference, so every other view shrinks into the canvas. With at most half of the views zoomed
+  (all v1 runs) this equals the lower median, so v1 results are unchanged; with 70% zoomed views (z2_f70) the old rule
+  would have needed to grow normal views beyond the canvas and crashed.
 
 ## 11. Code map
 
@@ -229,5 +256,122 @@ before the affected results are read. `configs/lens_analysis.yaml` is unchanged.
 | Sec. 6 runs | `scripts/eval_bench.py --lens "arm=...,zoom=2,fraction=0.3"` |
 | parity, per-view analysis, gates / tables / figures / records | `scripts/lens_eval.py parity | views | analyse` |
 | photo demo, COLMAP reference | `scripts/lens_demo.py`, `scripts/colmap_reference.py` |
+| D1 nested detail views: robust scale / shift alignment (`nest_oracle` arm in the adapter) | `src/da3/enhancements/lens/detail.py`; detail metric `metrics.detail_metrics` |
+| pre-registered plans | `configs/lens_analysis.yaml` (v1), `configs/lens_analysis_v2.yaml` (v2: confirmation + D1) |
 | tests | `tests/test_lens.py` |
 | notebook | `notebooks/10_lens.ipynb` (generated by `notebooks/make_notebooks.py`) |
+
+## 12. Results (2026-11-27, DA3-Small [official], 50 paired scenes: HiRoom 30, 7Scenes 7, DTU-64 13)
+
+Checks: 61 unit tests pass. Gate L0 PASS: with no zoomed view, all five arms are bit-identical to the released adapter
+(GPU, released weights). Full tables: `lens/summary.md` of the run, copied into
+[reports/enhancement_4_lens.md](../reports/enhancement_4_lens.md).
+
+**Primary protocol z2_f30** (in brackets: paired difference to `native`, 95% CI):
+
+| Arm | AUC@30 | AUC@30 zoom–normal pairs (rot / trans only) | AUC@3 | depth-scale ratio zoom / normal | focal ratio (zoomed) | scene AbsRel | tokens |
+|---|---|---|---|---|---|---|---|
+| unzoomed (ceiling) | 79.8 | 79.7 (92.5 / 81.0) | 15.9 | 0.999 | 1.079 | 0.062 | 38.1k |
+| native (DA3 as released) | 48.9 | 18.3 (80.4 / 19.3) | 6.7 | **1.893** [1.866, 1.918] | 0.583 | 0.191 | 38.1k |
+| canon_oracle (P1, true zoom) | 64.8 (+16.0 [14.7, 17.2]) | 50.4 (86.0 / 51.8) | 7.8 | 1.168 [1.156, 1.180] | 0.702 | 0.090 | 29.6k |
+| canonpad_oracle (diagnostic) | 68.1 (+19.3 [16.4, 21.8]) | 61.9 (81.8 / 64.1) | 7.9 | **1.043** [1.015, 1.084] | 1.105 | 0.078 | 38.1k |
+| canon_self (P1, zoom from DA3) | 49.1 (+0.21 [0.10, 0.33]) | 18.8 | 6.7 | 1.893 | 0.585 | 0.191 | 37.6k |
+
+Gates: L1 **PASS**, L2 **FAIL** (1.168, not within ±5%), L3 **PASS** (+0.21; negligible), L4 **FAIL** (median zoom error
+0.471 [0.451, 0.484]). The pre-registered hypothesis readout is "mixed / unclear": the padded CI crosses 1.05.
+
+**Secondary protocols** (descriptive, 98.3% CIs): the same picture at every zoom.
+
+| Protocol | native scale ratio | P1 true zoom: scale ratio, Δ AUC@30 | P1 self: Δ AUC@30 |
+|---|---|---|---|
+| z1p5_f30 | 1.453 | 1.093, +16.7 [15.3, 18.1] | +0.02 |
+| z3_f30 | 2.744 | 1.261, +11.7 [9.9, 13.5] | +0.37 |
+| z2_f70 | 1.893 | 1.239, +17.4 [14.0, 20.1] (72.6k tokens: wide views up to 1008 px) | −0.02 |
+
+Per dataset (z2_f30, AUC@30): P1 with the true zoom gives +15.3 on HiRoom, +15.2 on 7Scenes and +17.9 on DTU-64.
+
+**What it means**
+1. **DA3 reads zoom as moving closer, inside a multi-view pass.** The depth-scale ratio follows zoom^0.92 at all three
+   zooms (1.5^0.92 = 1.45, 2^0.92 = 1.89, 3^0.92 = 2.75). Rotations stay roughly right, but camera positions collapse:
+   translation-only AUC@30 drops from 81 to 19.
+2. **The camera head is almost blind to zoom.** Dividing the zoomed focal ratio by the general bias (1.079), DA3 notices
+   about 1.05× of a 1.5× zoom, 1.08× of 2× and 1.10× of 3×. So `canon_self` almost never acts (L4).
+3. **Equal angular resolution fixes most of it, if the zoom is known.** It recovers 52% of the AUC@30 lost to zoom (62%
+   padded), cuts the scene depth error from 0.191 to 0.090 (0.078 padded), and uses 22% fewer tokens.
+4. **H_ang is the main cause; the grid explains the rest** (interpretation; the pre-registered readout is "unclear"). The
+   leftover offset of `canon_oracle` grows about as zoom^0.22. On the full canvas (padded) the scale (1.043) and the focal
+   length (1.105, the unzoomed value) come out right.
+5. **AUC@3 barely moves** (+1.1): processing zoomed views smaller discards their fine detail. That is the gap §13
+   wants to close.
+
+## 13. Next step (under discussion, 2026-11-27): zoomed photos as *detail*, not noise
+
+A photo zoomed z× has z² times more pixels per square degree over its part of the scene. The released DA3 turns that into
+an error. P1 removes the error but throws the extra pixels away. The aim is to use them, so that zoomed photos add
+detail where they look, while the rest of the reconstruction stays as P1 makes it.
+
+**Constraints from the measurements**
+- **C1:** a zoomed view gets the right pose and scale only at equal angular resolution, best on the full canvas (padded).
+- **C2:** DA3's camera head cannot measure zoom (L4). An unlabeled variant needs another zoom estimate.
+- **C3:** depth is mostly per view (F3), and pose conditioning does not move it (F2). A full-resolution pass of a zoomed
+  photo will again come out "too close" (≈ zoom^0.92). It must be rescaled explicitly. That is easy, because the
+  padded pass gives the same camera with an exact pixel correspondence.
+
+**D1: labeled zoom (EXIF / known z). "Nested detail views", training-free, built from DA3's own parts**
+1. *Geometry pass:* P1-padded on all photos gives every camera and a coarse depth.
+2. *Detail pass:* each zoomed photo again at its native resolution, z× the base angular resolution. Optionally run it
+   in DA3's **pose-conditioned mode** (paper Sec. 3.2, camera encoder E_c): pose from step 1, intrinsics K·z exact.
+   This is DA3's own way to say "this view is zoomed z×". Whether the depth follows is a cheap check (C3 suggests it
+   will not, so step 3 does the scaling).
+3. *Exact alignment:* detail pixel (u, v) maps to padded pixel (u / z + offset) of the same camera. Fit scale and shift
+   robustly on the overlap: DA3's own RANSAC least-squares alignment (paper Sec. 4.2, Eq. 8), with the coarse multi-view
+   depth in the role of the sparse ground truth, starting from the canonical-camera guess depth × z (paper Sec. 4.4).
+   Optionally keep the low frequencies from the coarse map and the high frequencies from the detail map.
+4. *Fusion:* unproject the detail pixels with the step-1 camera and K·z. Inside the zoomed photo's footprint, they
+   densify or replace the coarse points (confidence-weighted, multi-resolution).
+- **Expected:** finer geometry where the zoomed photos look (statue, ornaments, windows). Identical output with no zoom.
+- **Evaluation:**
+  - *benchmark:* full DTU (1600 × 1200 originals with laser-scan ground truth). Its zoom crops hold real extra detail;
+    7Scenes (640 × 480) does not. Measure local Chamfer accuracy and completeness inside the zoom footprints, against
+    P1-padded alone and against the released DA3.
+  - *photo demo:* the statue with 2–3× shots, compared side by side in Blender.
+- **Novelty:** the merge step (aligning a high-resolution depth patch to a low-resolution base) is prior art: monocular
+  tiling (BoostingMonocularDepth, PatchFusion, URGT), and HD-VGGT refines the same views at high resolution. Not found:
+  real zoomed photos placed as nested views by a feed-forward multi-view model through their known zoom.
+  Claim only this zoom-aware nesting, and cite the tiling work.
+
+**D2: unlabeled zoom. Estimate z geometrically, then D1**
+- *PnP with unknown focal length:* match the photo's features to the 3D points of the other views, then solve pose
+  and focal length with P4Pf / PnPf + RANSAC (classical). z = f / f_ref.
+- *Zoom hypothesis test with DA3 itself (exploratory):* try z ∈ {1, 1.5, 2, 3} as padded inputs, and keep the z whose
+  reconstruction agrees best across views (the GT-free reprojection consistency we already have). Risk: DA3's "camera
+  moved closer" explanation can also be self-consistent (zoom–dolly ambiguity), so the criterion may not separate the
+  candidates.
+- **Gate:** the L4 criterion again (zoom error ≤ 10%, pose-only, cheap).
+- **Novelty:** PnPf is classical. Using it to label zoom for a feed-forward pipeline is engineering; claim only the
+  combination with D1.
+
+**D3: fine-tune the camera head to see zoom** (LoRA, self-distilled from the padded pass). Not recommended:
+- the closest prior work (label-free zoom self-consistency, 2611.17903) already exists for monocular models;
+- it is the slowest option;
+- our only LoRA attempt (#3) failed its gate.
+
+**Status 2026-11-27: steps 1 and 2 are implemented** and wait for their Kaggle run (notebook `10_lens`, part 3b):
+- plan v2 pre-registered in `configs/lens_analysis_v2.yaml`:
+  - Part A: V1 padded beats native, V2 padded beats canonical, V3 scale inside ±5%; protocols z1p5_f30, z3_f30,
+    z2_f70;
+  - Part B: D1a log-depth gradient error of the zoomed views goes down, D1b AbsRel at most +0.01, D1c same cameras;
+    protocols z2_f30, z3_f30; only scenes whose originals hold real extra pixels.
+- arm `nest_oracle`:
+  - padded pass, then the released pass for the zoomed views' depth;
+  - `fit_scale_shift` against the padded depth of the same camera;
+  - export at res × zoom (capped at the original size).
+- detail metric `detail_metrics`, computed at the GT resolution: scale-aligned AbsRel and log-depth gradient error.
+- Not done yet: the pose-conditioned variant of the detail pass (step 2 above) and D2.
+
+Proposed order (each step gated cheaply):
+1. a version-2 pre-registered plan that makes *padded* the P1 method (post-hoc so far) and confirms it on the secondary
+   protocols (pose-only, ~1 h);
+2. D1 on DTU (local accuracy in zoom footprints);
+3. D2-PnPf (L4 criterion);
+4. the photo demo with a zoomed statue set.

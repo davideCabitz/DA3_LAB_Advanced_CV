@@ -10,11 +10,18 @@ a share `fraction` of the views (never view 0, the reference of the paper protoc
 * `canon_oracle`    P1 with the true zoom: every view at the resolution that gives all views the same
                     angular resolution (zoomed views on a smaller grid), one pass (mixed-resolution
                     routing of enhancement #2, bit-identical at equal resolution);
-* `canonpad_oracle` diagnostic: like canon_oracle, but every view padded back to the common grid
-                    (same grid AND same angular resolution): separates the two hypotheses of docs/LENS.md;
+* `canonpad_oracle` like canon_oracle, but every view padded back to the common grid (same grid AND
+                    same angular resolution); the widest view is the reference, so every other view
+                    shrinks into the canvas. Diagnostic in plan v1, the P1 method in plan v2 (docs/LENS.md §13);
 * `canon_self`      P1 deployable: the zoom of every view is estimated from DA3's own first pass
                     (camera-head focal length); views within the dead band keep `res`. If no view is
-                    outside the dead band, the first pass is returned (bit-identical to `native`).
+                    outside the dead band, the first pass is returned (bit-identical to `native`);
+* `nest_oracle`     D1 "nested detail views" (docs/LENS.md §13), true zoom: cameras and coarse depth from the
+                    padded pass; each zoomed view's depth from a second pass at its native resolution (the
+                    released preprocessing, z x the angular resolution), aligned to its padded depth by a
+                    robust scale and shift (same camera, exact pixel map; paper Sec. 4.2 Eq. 8). Exported at
+                    `export_res` (default res x zoom, at most the original size) so the extra detail reaches
+                    the harness. Without zoomed views: exactly the padded arm (bit-identical to native).
 
 Angular resolution of a view processed at longest side r: f_photo * r / L_photo pixels per radian at
 the image centre (f_photo = focal length in photo pixels, L_photo = photo longest side). With
@@ -29,7 +36,7 @@ import numpy as np
 
 from .geometry import KIND_NORMAL, KIND_PORTRAIT, KIND_ZOOM, identity_capture, portrait_capture, zoom_capture
 
-ARMS = ("unzoomed", "native", "canon_oracle", "canonpad_oracle", "canon_self")
+ARMS = ("unzoomed", "native", "canon_oracle", "canonpad_oracle", "canon_self", "nest_oracle")
 REFS = ("median", "min", "max")
 
 
@@ -46,6 +53,7 @@ class LensSpec:
     min_res: int = 112         # canonical resolutions are clipped to [min_res, max_res]
     max_res: int = 1008
     ref: str = "median"        # reference view for the angular resolution: lower median of kappa
+    export_res: int = 0        # longest side of the exported maps; 0 = res (nest_oracle: res x zoom)
 
     def __post_init__(self):
         if self.arm not in ARMS:
@@ -56,6 +64,8 @@ class LensSpec:
             raise ValueError("fraction and portrait must be in [0, 1) with fraction + portrait < 1")
         if self.ref not in REFS:
             raise ValueError(f"ref must be one of {REFS}, got {self.ref!r}")
+        if self.export_res < 0:
+            raise ValueError(f"export_res must be >= 0 (0 = res), got {self.export_res}")
 
     # ---- names
     @property
@@ -92,7 +102,7 @@ class LensSpec:
                 raise ValueError(f"bad lens spec item {item!r} in {text!r}; fields: {sorted(types)}")
             if key in ("zoom", "fraction", "portrait", "deadband"):
                 kw[key] = float(val)
-            elif key in ("res", "min_res", "max_res"):
+            elif key in ("res", "min_res", "max_res", "export_res"):
                 kw[key] = int(val)
             else:
                 kw[key] = val

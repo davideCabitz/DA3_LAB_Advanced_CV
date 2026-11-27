@@ -30,6 +30,7 @@ import torch
 from da3.eval.bench_adapter import OursAsOfficialAPI, _loads
 from da3.io_utils import read_rgb, target_size
 
+from .detail import apply_scale_shift, fit_scale_shift
 from .geometry import KIND_NORMAL, AxisAffine, transform_K, warp_to
 from .inference import canonical_views, common_canvas, forward_views, padded_views, released_batch
 from .plan import LensSpec, assign_kinds, canonical_resolutions, captures_for, kappa_from_captures, reference_kappa
@@ -80,18 +81,27 @@ class LensAPI(OursAsOfficialAPI):
         caps = captures_for(spec, orig_hws, kinds)
         photos = [c.apply(im) for c, im in zip(caps, originals)]
         photo_hws = [tuple(int(t) for t in p.shape[:2]) for p in photos]
-        export_hw = target_size(orig_hws[0][0], orig_hws[0][1], spec.res)
+        detail_views = [s for s in range(n) if caps[s].zoom > 1.0 + 1e-6] if spec.arm == "nest_oracle" else []
+        export_res = spec.export_res or spec.res
+        if detail_views and not spec.export_res:   # nest: keep the zoomed views' extra pixels (at most the original size)
+            export_res = int(min(round(spec.res * max(caps[s].zoom for s in detail_views)), max(orig_hws[0])))
+        export_hw = target_size(orig_hws[0][0], orig_hws[0][1], export_res)
         kw = dict(ref_strategy=ref_view_strategy, amp=self.amp, use_ray_pose=self.use_ray_pose)
         contents = [None] * n
         z_est = np.full(n, np.nan)
         passes, res_list = 1, [spec.res] * n
         time_s = 0.0
+        extra_tokens = 0
+        fits = [None] * n
 
         if spec.arm in ("unzoomed", "native"):
             batch, affs = released_batch(photos, spec.res)
             out = forward_views(self.model, batch, self.device, **kw)
-        elif spec.arm in ("canon_oracle", "canonpad_oracle"):
-            res_list = canonical_resolutions(kappa_from_captures(caps), spec.res, spec.ref, 0.0,
+        elif spec.arm in ("canon_oracle", "canonpad_oracle", "nest_oracle"):
+            # padding needs every view to shrink into the common canvas: the widest view is the reference
+            # (identical to the lower median whenever at most half of the views are zoomed, as in plan v1)
+            ref = spec.ref if spec.arm == "canon_oracle" else "min"
+            res_list = canonical_resolutions(kappa_from_captures(caps), spec.res, ref, 0.0,
                                              spec.min_res, spec.max_res)
             if spec.arm == "canon_oracle":
                 views, affs = canonical_views(photos, res_list)
@@ -114,12 +124,30 @@ class LensAPI(OursAsOfficialAPI):
                 passes = 2
         time_s += out["time_s"]
 
+        # ---- D1 (nest_oracle): the zoomed views' depth from a pass at their native resolution, aligned to the
+        # padded depth of the same camera; cameras stay the padded pass's
+        dsrc, csrc, daff, dcont = list(out["depth"]), list(out["conf"]), [None] * n, list(contents)
+        if detail_views:
+            batch_b, affs_b = released_batch(photos, spec.res)
+            out_b = forward_views(self.model, batch_b, self.device, **kw)
+            time_s += out_b["time_s"]
+            passes, extra_tokens = 2, patch_tokens(out_b["hw"])
+            for s in detail_views:
+                hw_b = tuple(int(t) for t in out_b["hw"][s])
+                coarse = warp_to(out["depth"][s], affs_b[s].inverse().then(affs[s]), hw_b, contents[s])
+                fit = fit_scale_shift(out_b["depth"][s], coarse, valid=coarse > 0, seed=s)
+                fits[s] = fit
+                dsrc[s] = apply_scale_shift(out_b["depth"][s], fit)
+                csrc[s], daff[s], dcont[s] = out_b["conf"][s], affs_b[s], None
+
         # ---- back to the frame of the dataset image, at the export size
         depth, conf, Ks = [], [], []
         for s in range(n):
-            A = AxisAffine.resize(export_hw, orig_hws[s]).then(caps[s].affine()).then(affs[s])   # export -> processed
-            depth.append(warp_to(out["depth"][s], A, export_hw, contents[s]))
-            conf.append(warp_to(out["conf"][s], A, export_hw, contents[s]))
+            base = AxisAffine.resize(export_hw, orig_hws[s]).then(caps[s].affine())
+            A = base.then(affs[s])                                   # export -> processed (camera pass)
+            Ad = A if daff[s] is None else base.then(daff[s])        # export -> processed (depth pass)
+            depth.append(warp_to(dsrc[s], Ad, export_hw, dcont[s]))
+            conf.append(warp_to(csrc[s], Ad, export_hw, dcont[s]))
             Ks.append(out["K"][s] if A.is_identity() else transform_K(out["K"][s], A.inverse()))
         pred = {"depth": np.stack(depth).astype(np.float32, copy=False),
                 "conf": np.stack(conf).astype(np.float32, copy=False),
@@ -131,7 +159,10 @@ class LensAPI(OursAsOfficialAPI):
                 "orig_hw": np.asarray(orig_hws, np.int32), "photo_hw": np.asarray(photo_hws, np.int32),
                 "view_hw": np.asarray(out["hw"], np.int32), "res": np.asarray(res_list, np.int32),
                 "export_hw": np.asarray(export_hw, np.int32), "z_est": z_est, "passes": passes,
-                "tokens": patch_tokens(out["hw"]), "time_s": float(time_s),
+                "tokens": patch_tokens(out["hw"]) + extra_tokens, "time_s": float(time_s),
+                "detail_a": np.array([f["a"] if f else np.nan for f in fits], np.float64),
+                "detail_b": np.array([f["b"] if f else np.nan for f in fits], np.float64),
+                "detail_inliers": np.array([f["inliers"] if f else np.nan for f in fits], np.float64),
                 "ref_index": -1 if out["ref_index"] is None else int(out["ref_index"]),
                 "n_zoom": int((np.asarray(kinds) != KIND_NORMAL).sum())}
         return {"pred": pred, "meta": meta}

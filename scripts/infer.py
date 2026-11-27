@@ -6,7 +6,10 @@
   python scripts/infer.py --images ... --per-image   # each image alone (N_v = 1): depth + ray map per image
 
 poses.json: {"frames": [{"file": "img.jpg", "K": 3x3 (pixels of the original image),
-             "c2w": 4x4 OpenCV camera-to-world}, ...]} (or "w2c" instead of "c2w").
+             "c2w": 4x4 OpenCV camera-to-world}, ...]} (or "w2c" instead of "c2w"). Photos without an entry
+             are skipped. COLMAP cameras in this format: scripts/colmap_reference.py --poses-out poses.json
+             (the robust choice for 360-degree walks around an object, where DA3's own cameras can collapse).
+  --turntable-crop 1.0    writes turntable.json: blender_turntable.py then hides far background / sky by default
 
 Outputs in --out:
   depth/<name>.npy, depth/<name>.png (colour-mapped), conf/<name>.npy,
@@ -101,12 +104,25 @@ def main():
                     help="drop 'flying pixels' at depth edges (3x3 depth range > rtol x depth) from the "
                          "point cloud and the mesh; 0 = keep them")
     ap.add_argument("--mesh", choices=["tsdf", "depth", "none"], default="tsdf")
+    ap.add_argument("--turntable-crop", type=float, default=None,
+                    help="default of blender_turntable.py's clutter crop for this reconstruction (written to "
+                         "turntable.json next to it; e.g. 1.0 hides far background / sky; the script's own "
+                         "default is 2.0)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
 
     paths = list_images(args.images)
     if not paths:
         raise SystemExit(f"no images found in {args.images}")
+    if args.poses:   # known cameras (e.g. COLMAP): photos without a camera are left out
+        posed = {f["file"] for f in json.loads(Path(args.poses).read_text())["frames"]}
+        skipped = [p.name for p in paths if p.name not in posed]
+        paths = [p for p in paths if p.name in posed]
+        if skipped:
+            print(f"[infer] {len(skipped)} photo(s) have no camera in {args.poses} and are skipped: "
+                  + ", ".join(skipped[:10]) + (" ..." if len(skipped) > 10 else ""))
+        if len(paths) < 2:
+            raise SystemExit(f"--poses: only {len(paths)} photo(s) have a camera in {args.poses}")
     if args.max_views:
         paths = paths[:: max(1, len(paths) // args.max_views)][: args.max_views]
     model, setting = load_model(args.weights, args.device)
@@ -240,6 +256,8 @@ def reconstruct(paths, out: Path, args, model, setting, package: bool = True):
 
     shutil.copy(REPO / "scripts" / "blender_import.py", out / "blender_import.py")
     shutil.copy(REPO / "scripts" / "blender_turntable.py", out / "blender_turntable.py")
+    if getattr(args, "turntable_crop", None) is not None:   # read by blender_turntable.py (its defaults < this < CLI)
+        (out / "turntable.json").write_text(json.dumps({"crop": float(args.turntable_crop)}, indent=1))
     if package:
         print("package:", shutil.make_archive(str(out), "zip", root_dir=out))
 

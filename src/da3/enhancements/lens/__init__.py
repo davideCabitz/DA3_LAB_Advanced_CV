@@ -8,6 +8,7 @@ its own resolution, in one pass, with the mixed-resolution routing of enhancemen
 orientations keep their native aspect ratio (no centre-crop to a common size).
 """
 
+from .detail import apply_scale_shift, fit_scale_shift
 from .geometry import (
     KIND_NAMES,
     KIND_NORMAL,
@@ -34,6 +35,7 @@ from .plan import (
 
 __all__ = [
     "ARMS", "KIND_NAMES", "KIND_NORMAL", "KIND_PORTRAIT", "KIND_ZOOM", "AxisAffine", "Capture", "LensSpec",
-    "assign_kinds", "canonical_resolutions", "captures_for", "exif_focal_px", "identity_capture",
+    "apply_scale_shift", "assign_kinds", "canonical_resolutions", "captures_for", "exif_focal_px", "fit_scale_shift",
+    "identity_capture",
     "kappa_from_captures", "portrait_capture", "reference_kappa", "transform_K", "warp_to", "zoom_capture",
 ]

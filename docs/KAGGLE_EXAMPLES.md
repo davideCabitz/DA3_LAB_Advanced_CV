@@ -86,6 +86,19 @@ Each sub-folder of `multiview/` becomes one reconstruction named `my_<subfolder>
 `/kaggle/working/demo/single/<photo name>/` for every photo.
 
 ### 3.4 Optional settings (in the same cell)
+- `CAMERAS = "colmap"` (default) estimates the cameras of **your** photos with COLMAP (classical structure from
+  motion, CPU, a few minutes for ~40 photos). DA3 then predicts the depth with those cameras as input
+  (`infer.py --poses`).
+  - **Why:** on a 360° walk around a nearly symmetric object (our fountain set), DA3's own cameras collapsed
+    half of the walk onto one spot; the result was a "hedgehog" of streaks in Blender.
+  - **Coverage:** photos COLMAP cannot register are skipped. If COLMAP fails altogether, DA3's own cameras are
+    used.
+  - **Alternatives:** `"da3"` uses DA3's own cameras; `"both"` makes one reconstruction of each (`<name>_colmap`,
+    `<name>_da3`) for a side-by-side comparison. The built-in examples always use DA3's cameras.
+- `EXTRA_ARGS = "--conf-percentile 60 --turntable-crop 1.0"` (default):
+  - drops more low-confidence pixels (most of the sky);
+  - makes the turntable video hide far background by default (`turntable.json` in the zip; the script's own
+    default crop is 2.0).
 - `WEIGHTS = "official:da3-small"` is faster but less accurate. `"official:da3-base"` is the default.
 - `WEIGHTS = "official:da3-large"` loads DA3-LARGE-1.1. **This is not parity-checked by us yet**, and
   its README license is CC BY-NC (non-commercial).
@@ -102,8 +115,11 @@ Each sub-folder of `multiview/` becomes one reconstruction named `my_<subfolder>
     which pixels go into `points.ply` / `mesh.glb`; DA3's depth maps and cameras are untouched;
   - `--mesh depth` / `--mesh none`: cheaper meshing, or no mesh at all;
   - `--poses poses.json`: known cameras, if you have them. Format: `{"frames": [{"file": "IMG_0001.jpg",
-    "K": 3x3 in pixels of the original image, "c2w": 4x4 OpenCV camera-to-world}, ...]}`.
-    The depth is then expressed in the scale of your poses.
+    "K": 3x3 in pixels of the original image, "c2w": 4x4 OpenCV camera-to-world}, ...]}` (or `"w2c"`).
+    The depth is then expressed in the scale of your poses. Photos without an entry are skipped.
+    `scripts/colmap_reference.py --images <folder> --out <dir> --poses-out poses.json` writes this file from COLMAP
+    (what `CAMERAS = "colmap"` does);
+  - `--turntable-crop 1.0`: default clutter crop of `blender_turntable.py` for this reconstruction.
 
 ## 4. What you get
 

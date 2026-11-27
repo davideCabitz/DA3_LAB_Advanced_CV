@@ -749,6 +749,7 @@ prediction is mapped back exactly to the dataset image frame.
 | 1 · primary protocol | 5 arms × HiRoom / 7Scenes / DTU-64, pose + per-view analysis; TSDF F1 for `RECON_ARMS` (unzoomed, native, canon_self) | ~2.5–3 h (TSDF on CPU, ~40–60 min per F1 arm) |
 | 2 · secondary protocols | zoom 1.5× / 3× / 70% zoomed views, 3 arms, pose only | ~1 h |
 | 3 · analysis | pre-registered gates L1–L4, tables, figures, result records | ~1 min |
+| 3b · plan v2 | padded P1 confirmed on 3 fresh protocols (V1–V3); D1 nested detail views (D1a–D1c) | ~45 min |
 | 4 · photo demo | your photos: released vs orientation-only vs P1 (+ COLMAP pseudo-GT) | ~10 min / model |
 
 Settings: **Accelerator = GPU T4 ×2** (one T4 works, slower), **Internet = on**. Start with `MAX_SCENES = 2` (quick
@@ -769,7 +770,8 @@ PRIMARY = "zoom=2,fraction=0.3"             # pre-registered primary protocol (c
 ARMS = ["unzoomed", "native", "canon_oracle", "canonpad_oracle", "canon_self"]
 SECONDARY = ["zoom=1.5,fraction=0.3", "zoom=3,fraction=0.3", "zoom=2,fraction=0.7"]   # descriptive, pose only
 SECONDARY_ARMS = ["native", "canon_oracle", "canon_self"]
-RUN = {"tests": True, "parity": True, "primary": True, "secondary": True, "analyse": True, "demo": True}
+RUN = {"tests": True, "parity": True, "primary": True, "secondary": True, "analyse": True, "v2": True, "demo": True}
+V2_D1_RECON = False   # plan v2, part B: also score the TSDF F1 of canonpad / nest on z2_f30 (descriptive, ~40-60 min each)
 PHOTOS = ""            # photo demo: a folder of photos of ONE static scene, e.g. "/kaggle/input/trento-building/photos"
 DEMO_MODELS = ["da3-small", "da3-base"]
 COLMAP = True          # COLMAP pseudo ground truth for the photo demo (CPU, a few minutes)
@@ -812,8 +814,8 @@ def is_done(path):
 def tag_for(m, prot, arm):
     return f"lens_{m}_{'-'.join(DATASETS)}{LIM}__{LensSpec.parse(prot).protocol_id}__{arm}"
 
-def views_path(t):
-    return f"{OUT}/views_{t}.json"
+def views_path(t, views_dir=None):
+    return f"{views_dir or OUT}/views_{t}.json"
 
 def sh(cmd, log, env=None):
     """Run a command, log its output, show the tail, stop the notebook if it fails."""
@@ -824,9 +826,9 @@ def sh(cmd, log, env=None):
     hint = " = killed by the system, almost always out of RAM: lower FUSION_WORKERS and resume" if p.returncode == -9 else ""
     assert p.returncode == 0, f"failed (exit {p.returncode}{hint}): see {log}"
 
-def arm_modes(arm, modes):
+def arm_modes(arm, modes, recon_arms=None):
     """The TSDF reconstruction score only for RECON_ARMS (descriptive); pose + per-view analysis for every arm."""
-    return list(modes) if arm in RECON_ARMS else [x for x in modes if x != "recon_unposed"]
+    return list(modes) if arm in (RECON_ARMS if recon_arms is None else recon_arms) else [x for x in modes if x != "recon_unposed"]
 
 def bench_cmd(py, m, prot, arm, modes, extra):
     enh, var = {"native": ("baseline", "head"), "unzoomed": ("baseline", "unzoomed_ceiling")}.get(arm, ("lens", arm))
@@ -836,9 +838,9 @@ def bench_cmd(py, m, prot, arm, modes, extra):
             "--baseline-tag", tag_for(m, prot, "native"), "--results-root", RESULTS, "--lens", f"arm={arm},{prot}",
             *extra]
 
-def run_protocol(m, prot, arms, modes):
+def run_protocol(m, prot, arms, modes, views_dir=None, recon_arms=None):
     """Inference of up to NGPU arms in parallel (one GPU each), then CPU scoring + per-view analysis."""
-    todo = [a for a in arms if not is_done(views_path(tag_for(m, prot, a)))]
+    todo = [a for a in arms if not is_done(views_path(tag_for(m, prot, a), views_dir))]
     for a in arms:
         if a not in todo:
             print("already done:", tag_for(m, prot, a))
@@ -849,7 +851,7 @@ def run_protocol(m, prot, arms, modes):
             t = tag_for(m, prot, arm)
             env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(g))
             log = open(f"{LOGS}/{t}__infer.log", "w")
-            procs.append((arm, t, subprocess.Popen(bench_cmd("python", m, prot, arm, arm_modes(arm, modes),
+            procs.append((arm, t, subprocess.Popen(bench_cmd("python", m, prot, arm, arm_modes(arm, modes, recon_arms),
                                                              ["--infer-only", "--skip-existing"]),
                                                    stdout=log, stderr=subprocess.STDOUT, env=env)))
             print(f"[GPU {g}] inference: {t}")
@@ -859,18 +861,18 @@ def run_protocol(m, prot, arms, modes):
             assert rc == 0, f"inference failed for {t}: see {LOGS}/{t}__infer.log"
         for arm, t, _ in procs:
             print(f"scoring: {t}")
-            sh(bench_cmd(SCORER, m, prot, arm, arm_modes(arm, modes), ["--eval-only", "--fusion-workers", str(FUSION_WORKERS)]),
+            sh(bench_cmd(SCORER, m, prot, arm, arm_modes(arm, modes, recon_arms), ["--eval-only", "--fusion-workers", str(FUSION_WORKERS)]),
                f"{LOGS}/{t}__score.log")
             sh([SCORER, "scripts/lens_eval.py", "views", "--official-src", OFFICIAL_SRC, "--bench-root", BENCH,
                 "--work-root", WORK, "--tag", t, "--datasets", *DATASETS, "--weights", f"official:{m}",
-                "--out", views_path(t)], f"{LOGS}/{t}__views.log")
+                "--out", views_path(t, views_dir)], f"{LOGS}/{t}__views.log")
             if not KEEP_EXPORTS:
                 shutil.rmtree(f"{WORK}/workspace/evaluation/{t}", ignore_errors=True)'''),
     md("### Data: DA3-BENCH subsets (HF `depth-anything/DA3-BENCH`)"),
     code('''from huggingface_hub import hf_hub_download
 import zipfile
 os.makedirs(BENCH, exist_ok=True)
-if RUN["primary"] or RUN["secondary"]:
+if RUN["primary"] or RUN["secondary"] or RUN.get("v2"):
     for d in DATASETS:
         if not os.path.exists(f"{BENCH}/{d}"):
             z = hf_hub_download("depth-anything/DA3-BENCH", f"{d}.zip", repo_type="dataset", local_dir="/tmp/zips")
@@ -890,7 +892,7 @@ if RUN["parity"]:
         /kaggle/working/samples/robot_unitree --frames 8 --start 0.1 --end 0.6
     for m in MODELS:
         p = f"{OUT}/parity_{m}.json"
-        if not is_done(p):
+        if not is_done(p) or not any("nest_oracle" in k for k in json.load(open(p))["checks"]):   # v1 parity: re-run (D1 arm)
             sh(["python", "scripts/lens_eval.py", "parity", "--weights", f"official:{m}",
                 "--images", "/kaggle/working/samples/robot_unitree", "--views", "8", "--out", p], f"{LOGS}/parity_{m}.log")
         chk = json.load(open(p))
@@ -931,6 +933,45 @@ for p in sorted(glob.glob(f"{OUT}/lens_*.png")):
     print(os.path.basename(p)); display(Image(p, width=1100))'''),
     code('''!python scripts/compare_results.py --dirs {RESULTS} --out {OUT}/comparison.md > /dev/null
 display(Markdown(open(f"{OUT}/comparison.md").read()))'''),
+    md("""### 3b · Plan v2 (pre-registered 2026-11-27, `configs/lens_analysis_v2.yaml`): is padded P1 confirmed? Do zoomed views add detail (D1)?
+Two questions, gated before any of their runs (docs/LENS.md §13):
+* **Part A, confirmation:** padded P1 (`canonpad_oracle`, the best arm of v1, chosen after the fact) on the three
+  protocols where it never ran: V1 beats DA3 as released, V2 beats unpadded P1 (AUC@30), V3 consistent depth scale.
+* **Part B, D1 nested detail views** (`nest_oracle`, new): cameras and coarse depth from the padded pass; each zoomed
+  view's depth from a second pass at its native resolution, aligned to its padded depth (robust scale and shift, paper
+  Sec. 4.2 Eq. 8) and exported at res × zoom. D1a: the log-depth gradient error of the zoomed views (at the GT
+  resolution, scenes with real extra pixels) goes down; D1b: AbsRel not worse by more than 0.01; D1c: same cameras.
+
+The v1 runs of DA3 as released and unpadded P1 are reused (copied from the v1 output: set `RESUME_FROM`); the
+padded arm runs again on z2_f30 because its v1 exports had no detail metrics. Pose only (`V2_D1_RECON = True` adds the
+TSDF F1 on z2_f30, descriptive). ~45 min on 2× T4."""),
+    code('''V2_DIR = f"{OUT}/v2"
+V2_PLAN = "configs/lens_analysis_v2.yaml"
+V2_RUNS = {PRIMARY: ["canonpad_oracle", "nest_oracle"],             # D1 (padded again: v1 exports had no detail metrics)
+           "zoom=3,fraction=0.3": ["canonpad_oracle", "nest_oracle"],   # confirmation + D1
+           "zoom=1.5,fraction=0.3": ["canonpad_oracle"],               # confirmation
+           "zoom=2,fraction=0.7": ["canonpad_oracle"]}                  # confirmation (the widest view is the reference)
+if RUN["v2"]:
+    os.makedirs(V2_DIR, exist_ok=True)
+    for m in MODELS:
+        # reuse the v1 runs that v2 does not change: DA3 as released and unpadded P1 on every protocol
+        for prot in [PRIMARY] + SECONDARY:
+            for arm in ("native", "canon_oracle"):
+                t = tag_for(m, prot, arm)
+                if is_done(views_path(t)) and not is_done(views_path(t, V2_DIR)):
+                    shutil.copy(views_path(t), views_path(t, V2_DIR))
+                if not is_done(views_path(t, V2_DIR)):
+                    print("v1 run not found (attach the v1 output with RESUME_FROM); running it now:", t)
+                    run_protocol(m, prot, [arm], ["pose"], views_dir=V2_DIR)
+        for prot, arms in V2_RUNS.items():
+            recon = V2_D1_RECON and prot == PRIMARY
+            run_protocol(m, prot, arms, MODES.split() if recon else ["pose"], views_dir=V2_DIR,
+                         recon_arms=arms if recon else [])
+    sh([SCORER, "scripts/lens_eval.py", "analyse", "--out-dir", V2_DIR, "--results-root", RESULTS, "--plan", V2_PLAN],
+       f"{LOGS}/analyse_v2.log")
+    display(Markdown(open(f"{V2_DIR}/summary_v2.md").read()))
+    for p in sorted(glob.glob(f"{V2_DIR}/lens_*_v2.png")):
+        print(os.path.basename(p)); display(Image(p, width=1100))'''),
     md("""### 4 · Photo demo: the same photos, released DA3 vs P1
 Upload the photos of one static scene as a Kaggle dataset (keep the **original files with EXIF**, not photos sent
 through a messaging app) and set `PHOTOS`. Best shown with a mix of lenses: most photos at 1× (portrait and landscape),
@@ -1119,6 +1160,11 @@ Attach your photos as a Kaggle dataset and set `MY_MULTIVIEW` / `MY_SINGLE` belo
 MY_MULTIVIEW = ""   # folder of one scene, OR a folder whose sub-folders are scenes, e.g. "/kaggle/input/my-photos/multiview"
 MY_SINGLE = ""      # folder of independent images, e.g. "/kaggle/input/my-photos/single"
 WEIGHTS = "official:da3-base"   # released weights (Apache-2.0); or a checkpoint path from 02_train
+CAMERAS = "colmap"   # your photos: "colmap" = cameras from COLMAP (classical SfM, CPU, a few minutes) + DA3 depth;
+                     # robust for 360-degree walks around an object, where DA3's own cameras can collapse.
+                     # "da3" = DA3's own cameras; "both" = one reconstruction each (<name>_colmap, <name>_da3)
+EXTRA_ARGS = "--conf-percentile 60 --turntable-crop 1.0"   # fewer sky / low-confidence points; the turntable
+                     # video hides far background by default (blender_turntable.py reads turntable.json)
 OUT = "/kaggle/working/demo"
 from pathlib import Path
 IMG = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -1135,14 +1181,53 @@ sets = {"SOH": "/kaggle/working/Depth-Anything-3/assets/examples/SOH",
 if MY_MULTIVIEW:
     sets.update({f"my_{k}": v for k, v in scenes_in(MY_MULTIVIEW).items()})
 print(sets)'''),
-        md("### Multi-view reconstructions"),
-        code('''for name, folder in sets.items():
-    !python scripts/infer.py --images {folder} --out {OUT}/{name} --weights {WEIGHTS}
+        md("""### Multi-view reconstructions
+Your photos (`my_*`): with `CAMERAS = "colmap"` the cameras come from COLMAP (`scripts/colmap_reference.py`,
+classical structure from motion on the CPU) and DA3 predicts the depth with those cameras as input
+(`infer.py --poses`, DA3's camera conditioning). Photos COLMAP cannot register are skipped; if COLMAP fails
+altogether, DA3's own cameras are used. The two built-in examples always use DA3's cameras."""),
+        code('''import json, subprocess, sys
+def colmap_poses(name, folder):
+    """COLMAP cameras of one photo folder -> poses.json for infer.py --poses ("" if COLMAP fails)."""
+    cdir = f"/kaggle/working/colmap/{name}"
+    pj = f"{cdir}/poses.json"
+    if not os.path.exists(pj):
+        r = subprocess.run([sys.executable, "scripts/colmap_reference.py", "--images", folder, "--out", cdir,
+                            "--poses-out", pj], capture_output=True, text=True)
+        print("\\n".join((r.stdout + r.stderr).strip().splitlines()[-4:]))
+    try:
+        n = len(json.load(open(pj))["frames"])
+    except Exception:
+        n = 0
+    if n >= 3:
+        return pj
+    print(f"COLMAP registered {n} photo(s) of {name}: using DA3's own cameras instead")
+    return ""
+
+runs = []   # (output name, photo folder, poses.json or "")
+if CAMERAS != "da3" and any(k.startswith("my_") for k in sets):
+    !pip install -q pycolmap
+for name, folder in sets.items():
+    if name.startswith("my_") and CAMERAS in ("colmap", "both"):
+        pj = colmap_poses(name, folder)
+        if not pj:
+            runs.append((name, folder, ""))
+        elif CAMERAS == "colmap":
+            runs.append((name, folder, pj))
+        else:
+            runs += [(f"{name}_colmap", folder, pj), (f"{name}_da3", folder, "")]
+    else:
+        runs.append((name, folder, ""))
+for name, folder, pj in runs:
+    poses = f"--poses {pj}" if pj else ""
+    print(f"=== {name}: {'COLMAP cameras' if pj else 'DA3 cameras'}")
+    !python scripts/infer.py --images {folder} --out {OUT}/{name} --weights {WEIGHTS} {poses} {EXTRA_ARGS}
     !python scripts/render_preview.py {OUT}/{name}
 !ls -la {OUT}'''),
         code('''from IPython.display import Image, display
-for name in sets:
-    print(name, "| columns: RGB | depth (red = near, blue = far) | ray map (direction as RGB) | depth confidence (red = high, blue = low)")
+for name, _, pj in runs:
+    print(name, "(COLMAP cameras)" if pj else "(DA3 cameras)",
+          "| columns: RGB | depth (red = near, blue = far) | ray map (direction as RGB) | depth confidence (red = high, blue = low)")
     display(Image(f"{OUT}/{name}/preview.png", width=1000))
     display(Image(f"{OUT}/{name}/preview_3d.png", width=1000))'''),
         md("### Single images: depth map + ray map per image (N_v = 1)"),
@@ -1160,7 +1245,7 @@ Blender cameras land on the same pixels as the OpenCV projection (should be < 1 
         code('''import sys
 if sys.version_info[:2] == (3, 11):
     !pip install -q bpy
-    for name in sets:
+    for name, _, _ in runs:
         !python scripts/blender_smoke_test.py /kaggle/working/demo/{name} /kaggle/working/demo/{name}/blender_smoke_test.json > /dev/null
         !cat /kaggle/working/demo/{name}/blender_smoke_test.json
 else:

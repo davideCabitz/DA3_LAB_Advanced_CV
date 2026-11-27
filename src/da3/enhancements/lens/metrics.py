@@ -93,6 +93,45 @@ def scene_view_metrics(results: dict, gt_w2c, gt_K, meta: dict, gts=None) -> dic
     return row
 
 
+# ----------------------------------------------------------------------------- detail (D1, docs/LENS.md §13)
+def detail_metrics(pred, gt, footprint=None, min_px: int = 64) -> dict:
+    """How much fine structure one predicted depth map has, measured at the GT resolution (D1 gate).
+
+    pred (any size, invalid = 0) is resized bilinearly to the GT size; only pixels whose whole interpolation
+    neighbourhood is valid count (the validity mask is resized too). It is scaled by the median ratio to the
+    GT (scale-free), then:
+    * abs_rel: mean |s pred - gt| / gt;
+    * grad: mean |Δ log(s pred) - Δ log gt| over horizontal and vertical neighbour pairs. Scale-free; it
+      measures edges and fine structure, which a map predicted at a lower resolution cannot have.
+    footprint: optional bool mask at the GT size (e.g. where a zoomed view sees).
+    Returns {"abs_rel", "grad", "n"} (NaN when fewer than min_px pixels are usable)."""
+    import cv2
+
+    gt = np.asarray(gt, np.float64)
+    H, W = gt.shape
+    p = np.asarray(pred, np.float32)
+    v = (np.isfinite(p) & (p > 0)).astype(np.float32)
+    pr = cv2.resize(np.where(v > 0, p, 0.0).astype(np.float32), (W, H), interpolation=cv2.INTER_LINEAR).astype(np.float64)
+    vr = cv2.resize(v, (W, H), interpolation=cv2.INTER_LINEAR)
+    ok = (vr > 0.999) & np.isfinite(gt) & (gt > 0) & (pr > 0)
+    if footprint is not None:
+        ok &= np.asarray(footprint, bool)
+    n = int(ok.sum())
+    if n < min_px:
+        return {"abs_rel": float("nan"), "grad": float("nan"), "n": n}
+    s = float(np.median(gt[ok] / pr[ok]))
+    ps = pr * s
+    abs_rel = float(np.mean(np.abs(ps[ok] - gt[ok]) / gt[ok]))
+    lp = np.log(np.where(ok, ps, 1.0))
+    lg = np.log(np.where(ok, gt, 1.0))
+    gx = ok[:, 1:] & ok[:, :-1]
+    gy = ok[1:, :] & ok[:-1, :]
+    ex = np.abs(np.diff(lp, axis=1) - np.diff(lg, axis=1))[gx]
+    ey = np.abs(np.diff(lp, axis=0) - np.diff(lg, axis=0))[gy]
+    e = np.concatenate([ex, ey])
+    return {"abs_rel": abs_rel, "grad": float(e.mean()) if len(e) else float("nan"), "n": n}
+
+
 # ----------------------------------------------------------------------------- GT-free consistency
 def _w2c44(w2c) -> np.ndarray:
     w = np.asarray(w2c, np.float64)

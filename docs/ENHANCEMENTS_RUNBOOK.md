@@ -251,6 +251,12 @@ Plan, hypothesis, novelty and the pre-registered gates: [LENS.md](LENS.md) (cons
    the RAM (2 on Kaggle): with 4, the 7Scenes fusion ran out of memory (exit -9, LENS.md §10). If it stops, attach the
    output and set `RESUME_FROM`: finished arms (`views_*.json` present) are skipped; an unfinished arm starts again
    (its exports were in `/tmp`). DA3-Base: a further session with `MODELS = ["da3-base"]`.
+3b. **Session 3, plan v2** (`configs/lens_analysis_v2.yaml`, docs/LENS.md §13): attach the v1 output, set `RESUME_FROM`, run with
+   `RUN["v2"] = True` and the other parts off except `tests` / `parity` (the parity re-runs because v1's has no D1 arm).
+   - **Runs:** padded P1 on three fresh protocols (confirmation), and D1 nested detail views on z2_f30 / z3_f30. The
+     v1 runs of native and unpadded P1 are reused.
+   - **Time:** about 45 min, pose only.
+   - **Send:** `lens/v2/summary_v2.md` and `gates_v2.json`.
 4. **What the gates mean:** L1 FAIL = DA3 is already lens-consistent: P1 is not needed and that is the result (report
    it as such, it is still a finding about DA3). L1 PASS + L3 PASS = P1 fixes a real failure of the released model.
    INCONCLUSIVE is reported as INCONCLUSIVE.

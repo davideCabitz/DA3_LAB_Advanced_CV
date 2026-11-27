@@ -1,0 +1,53 @@
+# Pre-registered statistical analysis plan, enhancement #4, VERSION 2 (docs/LENS.md §13).
+# Fixed on 2026-11-27, AFTER the v1 run (configs/lens_analysis.yaml; results in docs/LENS.md §12) and BEFORE any run of
+#   * canonpad_oracle on z1p5_f30, z3_f30, z2_f70 (v1 ran the padded arm only on z2_f30), and
+#   * nest_oracle (D1, a new arm) anywhere.
+# Read by `scripts/lens_eval.py analyse --plan configs/lens_analysis_v2.yaml`; its outputs get the suffix below, so the
+# v1 outputs are never overwritten. The SHA-256 of this file goes into every v2 record. Do NOT edit after the results
+# are in; deviations go to docs/LENS.md §10.
+version: 2
+output_suffix: "_v2"
+
+ci_level: 0.95
+bootstrap:
+  n: 4000
+  seed: 0                          # resampling unit: the scene (cluster bootstrap), paired across arms
+
+primary_protocol: z2_f30           # reported again for reference; no v1 gate is decided a second time
+secondary_protocols: [z1p5_f30, z3_f30, z2_f70]
+scale_band: 0.05
+auc_threshold: 0.0
+
+# Part A: is padded P1 (the post-hoc best arm of v1, +19.3 AUC@30 on z2_f30) confirmed on data it has never seen?
+confirm:
+  protocols: [z1p5_f30, z3_f30, z2_f70]    # Bonferroni over these 3 protocols (98.3% CIs)
+  method: canonpad_oracle                  # padded P1 with the true zoom (= the EXIF focal length on real photos);
+                                           # the widest view is the reference, every other view shrinks into the canvas
+  gates:
+    V1: {test: canonpad_oracle, reference: native, metric: auc30, rule: above_threshold}        # beats DA3 as released
+    V2: {test: canonpad_oracle, reference: canon_oracle, metric: auc30, rule: above_threshold}  # beats unpadded P1
+    V3: {arm: canonpad_oracle, metric: scale_ratio, rule: inside_band}                          # consistent depth scale
+  decision: >-
+    padded P1 is confirmed if V1 and V2 PASS on all three protocols; V3 decides, per protocol, whether the claim
+    "equal angular resolution on the full canvas gives a consistent depth scale" (H_ang) holds
+
+# Part B: do zoomed photos add detail? (D1 nested detail views, arm nest_oracle)
+d1:
+  protocols: [z2_f30, z3_f30]              # Bonferroni over these 2 protocols (97.5% CIs)
+  real_detail_only: true                   # only scenes whose originals are >= zoom x res wide, i.e. the zoomed crop
+                                           # holds real extra pixels (lens_eval views: detail_real); 7Scenes (640 px)
+                                           # is excluded by construction, the detail metrics need GT depth
+  gates:
+    D1a: {test: nest_oracle, reference: canonpad_oracle, metric: detail_grad_zoom, rule: below_zero}
+         # finer structure: log-depth gradient error of the zoomed views at the GT resolution goes down
+    D1b: {test: nest_oracle, reference: canonpad_oracle, metric: detail_abs_rel_zoom, rule: at_most, margin: 0.01}
+         # not less accurate: scale-aligned AbsRel of the zoomed views rises by at most 0.01
+    D1c: {test: nest_oracle, reference: canonpad_oracle, metric: auc30, rule: identical, tolerance: 0.05}
+         # construction check: the cameras are the padded pass's, so pose accuracy is unchanged (two separate GPU
+         # runs: |Δ AUC@30| <= 0.05 points per scene allows for kernel nondeterminism)
+  decision: D1 adds detail if D1a and D1b PASS on both protocols (and D1c holds)
+
+descriptive:
+  - AUC@3, cross-pair AUC@30, focal ratio, tokens and time of every arm
+  - detail metrics on scenes without real extra pixels (expected: no gain), and the fitted detail scale a
+  - F1 (TSDF) where computed
