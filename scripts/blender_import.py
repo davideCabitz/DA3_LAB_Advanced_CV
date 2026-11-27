@@ -60,8 +60,56 @@ def parse_args():
     return opts
 
 
+def read_ply_points(path):
+    """Our own binary PLY (da3.export.write_ply: x y z float32 + red green blue uint8, no faces) read with
+    numpy, so the result does not depend on Blender's PLY importer (Blender 5.3 drew it as streaks).
+    Returns (xyz (N, 3) float32, rgb (N, 3) uint8), or None for any other PLY layout."""
+    import numpy as np
+
+    with open(path, "rb") as f:
+        lines = []
+        while True:
+            line = f.readline()
+            if not line:
+                return None
+            lines.append(line.decode("ascii", "replace").strip())
+            if lines[-1] == "end_header":
+                break
+        if "format binary_little_endian 1.0" not in lines or any(l.startswith("element face") for l in lines):
+            return None
+        props = [l.split()[-1] for l in lines if l.startswith("property")]
+        if props != ["x", "y", "z", "red", "green", "blue"]:
+            return None
+        n = int(next(l.split()[2] for l in lines if l.startswith("element vertex")))
+        dt = np.dtype([("x", "<f4"), ("y", "<f4"), ("z", "<f4"), ("red", "u1"), ("green", "u1"), ("blue", "u1")])
+        arr = np.frombuffer(f.read(n * dt.itemsize), dtype=dt, count=n)
+    return (np.stack([arr["x"], arr["y"], arr["z"]], 1).astype(np.float32),
+            np.stack([arr["red"], arr["green"], arr["blue"]], 1))
+
+
+def points_object(name, xyz, rgb):
+    """A vertex-only mesh with a per-point colour attribute "Col" (linear float colour from the sRGB bytes)."""
+    import numpy as np
+
+    me = bpy.data.meshes.new(name)
+    me.vertices.add(len(xyz))
+    me.vertices.foreach_set("co", np.ascontiguousarray(xyz, np.float32).ravel())
+    s = rgb.astype(np.float32) / 255.0
+    lin = np.where(s <= 0.04045, s / 12.92, ((s + 0.055) / 1.055) ** 2.4)
+    rgba = np.concatenate([lin, np.ones((len(lin), 1), np.float32)], 1).astype(np.float32)
+    attr = me.color_attributes.new("Col", "FLOAT_COLOR", "POINT")
+    attr.data.foreach_set("color", rgba.ravel())
+    me.update()
+    obj = bpy.data.objects.new(name, me)
+    bpy.context.scene.collection.objects.link(obj)
+    return obj
+
+
 def import_ply(path):
-    before = set(bpy.data.objects)
+    data = read_ply_points(path)
+    if data is not None:
+        return points_object("DA3_points", *data)
+    before = set(bpy.data.objects)          # any other PLY: Blender's own importer
     if hasattr(bpy.ops.wm, "ply_import"):          # Blender >= 3.6
         bpy.ops.wm.ply_import(filepath=path)
     else:                                          # older Blender

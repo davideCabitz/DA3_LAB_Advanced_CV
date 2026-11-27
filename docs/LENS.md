@@ -191,6 +191,12 @@ address multi-view sets, poses or fusion (as far as its abstract shows; re-check
 - `lens`: P1, equal angular resolution (EXIF focal lengths; DA3's own when a photo has none).
 
 Each is an `infer.py`-style folder (depth / ray maps, cameras, PLY, GLB, transforms.json, Blender import) and a zip.
+**Fair comparison rule:** the three arms always run the same weights through our code (`DEMO_MODELS`:
+`da3-small`, `da3-base`, optionally `da3-large`).
+- The online demo's model (DA3NESTED-GIANT-LARGE-1.1, through the official code) is only a labelled reference
+  (`scripts/official_reference.py`).
+- Each arm also writes a demo-style `scene.glb` (points + camera wireframes), so all arms and the demo can be viewed
+  in the same viewer.
 
 **How it is compared** (no GT exists):
 - **reprojection consistency** (GT-free, scale-free): median disagreement between each view's depth and its neighbours'

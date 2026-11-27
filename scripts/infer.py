@@ -16,6 +16,7 @@ Outputs in --out:
   ray/<name>.npy (h, w, 6) [origin, direction], ray/<name>.png (direction as RGB, like paper Fig. 2)
   cameras.json            K, w2c, c2w per view from the camera head D_C and from the ray map (Eq. 1-2)
   points.ply              fused coloured point cloud (confidence-filtered)
+  scene.glb               the same points (glTF POINTS) + camera wireframes, like the official demo's export
   transforms.json         NeRF-style cameras (+ OpenCV matrices); colmap/ text model
   mesh.glb                TSDF (Open3D) or depth-grid mesh, glTF axes (y up)
   preview.png             RGB / depth / confidence strip
@@ -38,6 +39,7 @@ import torch
 
 from da3.camera import affine_inverse, to_homogeneous
 from da3.export import (
+    write_points_glb,
     depth_edge_mask,
     depth_mesh,
     fuse_point_cloud,
@@ -213,6 +215,8 @@ def reconstruct(paths, out: Path, args, model, setting, package: bool = True):
     not_edge = ~edge
     P, C = fuse_point_cloud(points, rgb, conf, args.conf_percentile, mask=not_edge)
     write_ply(out / "points.ply", P, C)
+    # the same points as a glTF POINTS primitive + camera wireframes: the layout of the official demo's scene.glb
+    write_points_glb(out / "scene.glb", P, C, w2c_use.numpy(), K_use.numpy(), (H, W))
     write_transforms_json(out / "transforms.json", w2c_use.numpy(), K_use.numpy(), (H, W),
                           [f"images/{n}" for n in names], {"cameras_used": source})
     write_colmap_text(out / "colmap", w2c_use.numpy(), K_use.numpy(), (H, W), names)

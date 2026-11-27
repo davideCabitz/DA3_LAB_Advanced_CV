@@ -217,3 +217,43 @@ def write_glb(path, vertices, faces, colors):
     mesh.remove_unreferenced_vertices()
     mesh.export(str(path), file_type="glb")
     return len(mesh.vertices), len(mesh.faces)
+
+
+def camera_frustum_segments(w2c, K, hw, size: float) -> np.ndarray:
+    """Wireframe of every camera, (M, 2, 3) line segments in the OpenCV world frame: 4 edges from the camera
+    centre to the image corners at depth `size`, plus the image rectangle. hw: one (H, W) or one per view."""
+    w2c = _to44(np.asarray(w2c, np.float64))
+    K = np.asarray(K, np.float64)
+    segs = []
+    for i, (H, W) in enumerate(_per_view_hw(hw, len(w2c))):
+        c2w = np.linalg.inv(w2c[i])
+        uv1 = np.array([[0.0, 0.0, 1.0], [W, 0.0, 1.0], [W, H, 1.0], [0.0, H, 1.0]])
+        rays = (np.linalg.inv(K[i]) @ uv1.T).T * size                 # camera frame, depth = size
+        corners = rays @ c2w[:3, :3].T + c2w[:3, 3]
+        c = c2w[:3, 3]
+        segs += [[c, corners[j]] for j in range(4)] + [[corners[j], corners[(j + 1) % 4]] for j in range(4)]
+    return np.asarray(segs, np.float64).reshape(-1, 2, 3)
+
+
+def write_points_glb(path, points, colors, w2c=None, K=None, hw=None, camera_size: float | None = None) -> int:
+    """The point cloud as a glTF POINTS primitive (+ camera wireframes as LINES), in glTF axes (x, -y, -z): the
+    layout of the official demo's scene.glb (trimesh PointCloud + load_path), so ours and the demo's can be
+    looked at side by side in the same viewer. Returns the number of points."""
+    import trimesh
+
+    P = np.asarray(points, np.float64)
+    flip = np.array([1.0, -1.0, -1.0])
+    rgb = np.asarray(colors)
+    if rgb.dtype != np.uint8:
+        rgb = np.clip(rgb * (255 if rgb.max() <= 1.0 else 1), 0, 255).astype(np.uint8)
+    rgba = np.concatenate([rgb[:, :3], np.full((len(rgb), 1), 255, np.uint8)], 1)
+    scene = trimesh.Scene()
+    scene.add_geometry(trimesh.points.PointCloud(vertices=P * flip, colors=rgba), geom_name="points")
+    if w2c is not None and K is not None and hw is not None and len(P):
+        if camera_size is None:
+            lo, hi = np.percentile(P, 2, axis=0), np.percentile(P, 98, axis=0)
+            camera_size = 0.03 * float(np.linalg.norm(hi - lo))
+        segs = camera_frustum_segments(w2c, K, hw, camera_size) * flip
+        scene.add_geometry(trimesh.load_path(segs), geom_name="cameras")
+    scene.export(str(path), file_type="glb")
+    return len(P)

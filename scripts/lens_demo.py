@@ -90,7 +90,7 @@ def fit_height(img, h):
 def write_arm(out: Path, names, imgs, res: dict, args, setting: str, note: str) -> dict:
     """infer.py-style folder from forward_views output on per-view processed images `imgs`."""
     from da3.export import depth_edge_mask, depth_mesh, tsdf_mesh, write_colmap_text, write_glb, write_ply, \
-        write_transforms_json
+        write_points_glb, write_transforms_json
 
     for sub in ("depth", "conf", "ray", "images"):
         (out / sub).mkdir(parents=True, exist_ok=True)
@@ -131,6 +131,7 @@ def write_arm(out: Path, names, imgs, res: dict, args, setting: str, note: str) 
         sel = np.random.default_rng(0).choice(len(P), 2_000_000, replace=False)
         P, C = P[sel], C[sel]
     write_ply(out / "points.ply", P, C)
+    write_points_glb(out / "scene.glb", P, C, w2c, K, hws)   # demo-style points + camera wireframes
     write_transforms_json(out / "transforms.json", w2c, K, hws, [f"images/{nm}" for nm in names],
                           {"cameras_used": "camera head D_C", "note": note})
     write_colmap_text(out / "colmap", w2c, K, hws, names)

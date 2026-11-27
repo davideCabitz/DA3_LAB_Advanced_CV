@@ -95,10 +95,16 @@ Each sub-folder of `multiview/` becomes one reconstruction named `my_<subfolder>
     used.
   - **Alternatives:** `"da3"` uses DA3's own cameras; `"both"` makes one reconstruction of each (`<name>_colmap`,
     `<name>_da3`) for a side-by-side comparison. The built-in examples always use DA3's cameras.
-- `EXTRA_ARGS = "--conf-percentile 60 --turntable-crop 1.0"` (default):
-  - drops more low-confidence pixels (most of the sky);
-  - makes the turntable video hide far background by default (`turntable.json` in the zip; the script's own
-    default crop is 2.0).
+- `EXTRA_ARGS = "--turntable-crop 1.0"` (default): the turntable video hides far background by default
+  (`turntable.json` in the zip; the script's own default crop is 2.0). The confidence filter stays at the 40th
+  percentile; `--conf-percentile 60` removes more sky, but also thin parts such as a statue on top.
+- `OFFICIAL_REFERENCE = "depth-anything/DA3NESTED-GIANT-LARGE-1.1"` also runs the **official** code with the online
+  demo's model (1.4B parameters, CC BY-NC) on your photos (`scripts/official_reference.py`).
+  - **Output:** `demo/official_<name>/scene.glb`, the same file the online demo gives.
+  - **Reference only:** it is a different code path with different weights.
+- **Fair comparisons:** released DA3 vs an enhancement always uses the same weights through our code for every
+  arm (`da3-small`, `da3-base`, or `official:da3-large` = DA3-LARGE-1.1: CC BY-NC, not parity-checked by us).
+  The online demo / `OFFICIAL_REFERENCE` model is never one arm of a comparison.
 - `WEIGHTS = "official:da3-small"` is faster but less accurate. `"official:da3-base"` is the default.
 - `WEIGHTS = "official:da3-large"` loads DA3-LARGE-1.1. **This is not parity-checked by us yet**, and
   its README license is CC BY-NC (non-commercial).
@@ -134,6 +140,7 @@ Per reconstruction folder (`/kaggle/working/demo/<name>/` and `<name>.zip`):
 | `conf/<img>.npy` | depth confidence |
 | `cameras.json` | K and world-to-camera matrices from the camera head and from the ray map |
 | `points.ply` | fused coloured point cloud (low-confidence pixels removed) |
+| `scene.glb` | the same points as glTF POINTS + camera wireframes: the layout of the online demo's `scene.glb`, so both can be compared in the same viewer |
 | `mesh.glb` | TSDF mesh with vertex colours |
 | `transforms.json`, `colmap/` | cameras in NeRF / instant-ngp format and as a COLMAP text model |
 | `images/` | the resized input photos (Blender uses them as camera backgrounds) |
@@ -155,7 +162,8 @@ image in alphabetical order) defines the world frame.
    **Save Version > Save & Run All (Commit)**. The committed version then keeps
    `/kaggle/working` under its *Output* tab.
 2. Unzip `<name>.zip` on your computer.
-3. Open Blender (3.6 or newer; checked headless with 5.0.1). Go to the **Scripting** workspace,
+3. Open Blender (3.6 or newer; checked headless with 5.0.1; since 2026-11-27 `blender_import.py` reads `points.ply`
+   itself, because Blender 5.3's PLY importer drew our points as streaks). Go to the **Scripting** workspace,
    **Open** `blender_import.py` from the unzipped folder, and click **Run Script**.
 4. You get:
    - `DA3_points`: the point cloud, shown as coloured points through Geometry Nodes. Use *Material

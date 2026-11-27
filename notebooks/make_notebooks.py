@@ -773,7 +773,8 @@ SECONDARY_ARMS = ["native", "canon_oracle", "canon_self"]
 RUN = {"tests": True, "parity": True, "primary": True, "secondary": True, "analyse": True, "v2": True, "demo": True}
 V2_D1_RECON = False   # plan v2, part B: also score the TSDF F1 of canonpad / nest on z2_f30 (descriptive, ~40-60 min each)
 PHOTOS = ""            # photo demo: a folder of photos of ONE static scene, e.g. "/kaggle/input/trento-building/photos"
-DEMO_MODELS = ["da3-small", "da3-base"]
+DEMO_MODELS = ["da3-small", "da3-base"]   # + "da3-large" (CC BY-NC, not parity-checked) for the best quality;
+                       # released / orient / lens always run the SAME model: a fair comparison per model
 COLMAP = True          # COLMAP pseudo ground truth for the photo demo (CPU, a few minutes)
 RESUME_FROM = ""       # output root of an earlier run of this notebook (Add Input > Your Work > "Copy path")
 KEEP_EXPORTS = False   # harness exports are ~1-3 GB per run; the per-view analysis reads them before deletion
@@ -885,7 +886,8 @@ protocol kept apart. Then the same parity with the **released weights on the GPU
 (zoomed views fill only the centre of their export, principal point centred, canonical arms put zoomed views on a
 smaller grid). The notebook stops if a check fails."""),
     code('''if RUN["tests"]:
-    sh([sys.executable, "-m", "pytest", "-q", "tests/test_lens.py", "tests/test_compare.py", "tests/test_foveated.py"],
+    sh([sys.executable, "-m", "pytest", "-q", "tests/test_lens.py", "tests/test_compare.py", "tests/test_foveated.py",
+        "tests/test_export_points_glb.py"],
        f"{LOGS}/pytest.log")
 if RUN["parity"]:
     !python scripts/extract_frames.py /kaggle/working/Depth-Anything-3/assets/examples/robot_unitree.mp4 \\
@@ -1159,12 +1161,17 @@ Attach your photos as a Kaggle dataset and set `MY_MULTIVIEW` / `MY_SINGLE` belo
         code('''# ---- your inputs (leave "" to skip) ---------------------------------------------------------
 MY_MULTIVIEW = ""   # folder of one scene, OR a folder whose sub-folders are scenes, e.g. "/kaggle/input/my-photos/multiview"
 MY_SINGLE = ""      # folder of independent images, e.g. "/kaggle/input/my-photos/single"
-WEIGHTS = "official:da3-base"   # released weights (Apache-2.0); or a checkpoint path from 02_train
+WEIGHTS = "official:da3-base"   # released weights through OUR code: "official:da3-small" | "da3-base" (Apache-2.0,
+                     # parity-checked) | "official:da3-large" (DA3-LARGE-1.1: better, CC BY-NC, not parity-checked by us)
+                     # Comparisons (released DA3 vs an enhancement) always use ONE of these for every arm.
 CAMERAS = "colmap"   # your photos: "colmap" = cameras from COLMAP (classical SfM, CPU, a few minutes) + DA3 depth;
                      # robust for 360-degree walks around an object, where DA3's own cameras can collapse.
                      # "da3" = DA3's own cameras; "both" = one reconstruction each (<name>_colmap, <name>_da3)
-EXTRA_ARGS = "--conf-percentile 60 --turntable-crop 1.0"   # fewer sky / low-confidence points; the turntable
-                     # video hides far background by default (blender_turntable.py reads turntable.json)
+EXTRA_ARGS = "--turntable-crop 1.0"   # the turntable video hides far background (turntable.json); the confidence
+                     # filter stays at the default 40th percentile (60 also removed thin parts such as the statue on top)
+OFFICIAL_REFERENCE = ""   # e.g. "depth-anything/DA3NESTED-GIANT-LARGE-1.1" (the online demo's model, 1.4B, CC BY-NC):
+                     # also run the OFFICIAL code on your photos -> demo/official_<name>/scene.glb, exactly like the
+                     # online demo. REFERENCE ONLY (different code and weights): never the baseline of a comparison
 OUT = "/kaggle/working/demo"
 from pathlib import Path
 IMG = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
@@ -1238,6 +1245,17 @@ for name, _, pj in runs:
             print(d.name); display(Image(str(d / "preview.png"), width=1000))
 else:
     print("set MY_SINGLE to run this part")'''),
+        md("""### Optional: reference with the official code and the online demo's model
+`OFFICIAL_REFERENCE` runs the released DA3 API (pinned clone) with a large model on your photos and exports `scene.glb`
+exactly like the online demo (coloured points + camera wireframes). Our own folders contain a `scene.glb` in the same
+layout, so both can be opened side by side in the same viewer. **Reference only:** a fair comparison (released DA3 vs
+an enhancement) always runs the same weights through the same code for every arm."""),
+        code('''if OFFICIAL_REFERENCE:
+    for name, folder in sets.items():
+        if name.startswith("my_"):
+            !python scripts/official_reference.py --official-src {OFFICIAL_SRC} --images {folder} --out {OUT}/official_{name} --model {OFFICIAL_REFERENCE} --zip
+else:
+    print("set OFFICIAL_REFERENCE to also run the official code with the online demo's model")'''),
         code("!ls -la /kaggle/working/demo/*.zip  # download these (Output panel on the right)"),
         md("""### Optional: headless Blender check of the export (needs Python 3.11 for the `bpy` wheel)
 Imports each demo folder with `blender_import.py` and checks that points projected through the

@@ -73,6 +73,10 @@ Top 3 from the multi-agent study (docs/da3_enhancement_report.md §4–5). Run t
   - [ ] photo demo: needs a *zoomed* set (same walk + 2-3x details + some 0.5x, JPG with EXIF); the no-zoom statue set is single-lens
   - [x] notebook 04: COLMAP cameras for your photos (`CAMERAS = "colmap"`, `infer.py --poses`), `--conf-percentile 60`,
         `--turntable-crop 1.0` (fix for the collapsed 360-degree statue walk)
+  - [x] statue with COLMAP cameras: clean (34/34 registered, 262-degree arc). Blender 5.3 drew points.ply as streaks ->
+        blender_import.py now reads the PLY itself; every reconstruction also writes a demo-style scene.glb
+  - [x] the online demo runs DA3NESTED-GIANT-LARGE-1.1 (its own cameras match COLMAP within degrees): notebook 04
+        `OFFICIAL_REFERENCE` reproduces it (reference only); comparisons stay same-model (small / base / large)
   - [ ] DA3-Base run (optional)
 - [ ] "enhancement experiment" template (config + eval command)
 - [ ] VGGT / Pi3 / DA2 comparisons (not started)
