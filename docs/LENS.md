@@ -199,8 +199,23 @@ Each is an `infer.py`-style folder (depth / ray maps, cameras, PLY, GLB, transfo
 
 ## 10. Deviations log
 
-_None yet. Any change to the protocol, the arms or the plan after the first Kaggle run is logged here with its date
-and reason, before the affected results are read._
+Any change to the protocol, the arms or the plan after the first Kaggle run is logged here with its date and reason,
+before the affected results are read. `configs/lens_analysis.yaml` is unchanged.
+
+- **2026-11-27, run setup (no gate affected).** The first full run (DA3-Small, commit 0da40ae) scored `unzoomed` and
+  `native`, then the scoring of `canon_oracle` was killed by the system (exit -9, out of RAM) when the 7Scenes TSDF
+  fusion started. The harness fuses 7Scenes with no depth truncation, 4 fusions ran in parallel, and the mixed-lens
+  arms fuse more scattered geometry (scoring took 31 min for `unzoomed`, 45 min for `native`, and more than 36 min
+  for `canon_oracle` before it was killed). Changes:
+  1. the number of parallel fusions now comes from the RAM (~10 GB each, at most 4: 2 on Kaggle);
+  2. the TSDF F1 is computed only for `unzoomed`, `native` and `canon_self` (`RECON_ARMS`). F1 is descriptive in the
+     plan, and no gate uses it: L1 and L2 use the per-view scale ratio, L3 uses AUC@30, L4 uses the zoom estimates.
+     The pose and per-view numbers of all five arms are unchanged and paired on the same frames (frame sampling does
+     not depend on the modes).
+
+  Seen before this change: the parity output and the last lines of the two finished scoring logs (7Scenes F1 of
+  `unzoomed` and `native`, descriptive). No gate quantity (scale ratio, AUC@30, zoom error) was read. The change is
+  driven by RAM and time, not by those numbers.
 
 ## 11. Code map
 

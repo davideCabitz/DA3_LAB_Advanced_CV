@@ -245,10 +245,12 @@ Plan, hypothesis, novelty and the pre-registered gates: [LENS.md](LENS.md) (cons
 2. **Session 1, quick check:** `MAX_SCENES = 2` (labelled "limited"). Parts 0 (unit tests + GPU parity = gate L0; the
    notebook stops if they fail), 1 (primary protocol, 5 arms), 2 (secondary, pose only), 3 (gates), 4 (photo demo).
    ~30–45 min. Send `lens/summary.md` and `lens/parity_*.json`.
-3. **Session 2, real numbers:** `MAX_SCENES = 0` (DA3-Small). ~4–5 h; inference runs two arms at a time (one per
-   T4), the TSDF scoring is CPU-bound. If it stops, attach the output and set `RESUME_FROM`: finished arms
-   (`views_*.json` present) are skipped; an unfinished arm starts again (its exports were in `/tmp`). DA3-Base: a
-   further session with `MODELS = ["da3-base"]`.
+3. **Session 2, real numbers:** `MAX_SCENES = 0` (DA3-Small). ~3.5–4 h. Inference runs two arms at a time (one per
+   T4, ~6 min per pair); the TSDF scoring is CPU-bound (~40–60 min per arm) and dominates. The F1 is computed only for
+   `RECON_ARMS` (unzoomed, native, canon_self): it is descriptive, and no gate uses it. `FUSION_WORKERS` comes from
+   the RAM (2 on Kaggle): with 4, the 7Scenes fusion ran out of memory (exit -9, LENS.md §10). If it stops, attach the
+   output and set `RESUME_FROM`: finished arms (`views_*.json` present) are skipped; an unfinished arm starts again
+   (its exports were in `/tmp`). DA3-Base: a further session with `MODELS = ["da3-base"]`.
 4. **What the gates mean:** L1 FAIL = DA3 is already lens-consistent: P1 is not needed and that is the result (report
    it as such, it is still a finding about DA3). L1 PASS + L3 PASS = P1 fixes a real failure of the released model.
    INCONCLUSIVE is reported as INCONCLUSIVE.

@@ -746,7 +746,7 @@ prediction is mapped back exactly to the dataset image frame.
 | Part | What | Time (2× T4, DA3-Small, all scenes) |
 |---|---|---|
 | 0 · checks | unit tests (CPU) + GPU parity: no zoomed view ⇒ every arm bit-identical to the released adapter (gate L0) | ~5 min |
-| 1 · primary protocol | 5 arms × HiRoom / 7Scenes / DTU-64, pose + TSDF F1, per-view analysis | ~3–4 h (TSDF on CPU) |
+| 1 · primary protocol | 5 arms × HiRoom / 7Scenes / DTU-64, pose + per-view analysis; TSDF F1 for `RECON_ARMS` (unzoomed, native, canon_self) | ~2.5–3 h (TSDF on CPU, ~40–60 min per F1 arm) |
 | 2 · secondary protocols | zoom 1.5× / 3× / 70% zoomed views, 3 arms, pose only | ~1 h |
 | 3 · analysis | pre-registered gates L1–L4, tables, figures, result records | ~1 min |
 | 4 · photo demo | your photos: released vs orientation-only vs P1 (+ COLMAP pseudo-GT) | ~10 min / model |
@@ -775,6 +775,8 @@ DEMO_MODELS = ["da3-small", "da3-base"]
 COLMAP = True          # COLMAP pseudo ground truth for the photo demo (CPU, a few minutes)
 RESUME_FROM = ""       # output root of an earlier run of this notebook (Add Input > Your Work > "Copy path")
 KEEP_EXPORTS = False   # harness exports are ~1-3 GB per run; the per-view analysis reads them before deletion
+RECON_ARMS = ["unzoomed", "native", "canon_self"]   # arms that also get the TSDF score (F1, descriptive: no gate uses
+                       # it; ~40-60 min CPU per arm). The other arms: pose + per-view analysis. = ARMS for the full table
 
 OUT = "/kaggle/working/lens"
 RESULTS = f"{OUT}/results"                  # standard result records (commit these)
@@ -784,13 +786,19 @@ BENCH = "/tmp/da3bench"
 PLAN = "configs/lens_analysis.yaml"
 LIM = f"_limited{MAX_SCENES}" if MAX_SCENES else ""
 NGPU = max(1, torch.cuda.device_count())
+import psutil
+RAM_GB = psutil.virtual_memory().total / 2**30
+# parallel TSDF fusions in the scoring step. The 7Scenes fusion has no depth truncation (harness constant), and the
+# mixed-lens arms fuse more scattered geometry, so budget ~10 GB each: 4 workers ran out of RAM on Kaggle (exit -9).
+FUSION_WORKERS = max(1, min(4, os.cpu_count() or 1, int((RAM_GB - 4) // 10)))
 for d in (OUT, RESULTS, LOGS):
     os.makedirs(d, exist_ok=True)
 if RESUME_FROM:
     assert os.path.exists(RESUME_FROM), f"RESUME_FROM not found: {RESUME_FROM}"
     src = f"{RESUME_FROM}/lens" if os.path.exists(f"{RESUME_FROM}/lens") else RESUME_FROM
     !cp -rn {src}/* {OUT}/
-print("GPUs:", NGPU, "| scoring Python:", SCORER, "| primary modes:", MODES)'''),
+print("GPUs:", NGPU, "| scoring Python:", SCORER, "| primary modes:", MODES, "| F1 for:", RECON_ARMS,
+      f"| RAM {RAM_GB:.0f} GB -> FUSION_WORKERS = {FUSION_WORKERS}")'''),
     code(r'''# --- helpers: one job = one arm of one protocol through the released harness -----------------------------
 import subprocess
 from da3.enhancements.lens import LensSpec
@@ -813,7 +821,12 @@ def sh(cmd, log, env=None):
         p = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT, env=env)
     tail = open(log).read().splitlines()[-12:]
     print("\n".join(tail))
-    assert p.returncode == 0, f"failed (exit {p.returncode}): see {log}"
+    hint = " = killed by the system, almost always out of RAM: lower FUSION_WORKERS and resume" if p.returncode == -9 else ""
+    assert p.returncode == 0, f"failed (exit {p.returncode}{hint}): see {log}"
+
+def arm_modes(arm, modes):
+    """The TSDF reconstruction score only for RECON_ARMS (descriptive); pose + per-view analysis for every arm."""
+    return list(modes) if arm in RECON_ARMS else [x for x in modes if x != "recon_unposed"]
 
 def bench_cmd(py, m, prot, arm, modes, extra):
     enh, var = {"native": ("baseline", "head"), "unzoomed": ("baseline", "unzoomed_ceiling")}.get(arm, ("lens", arm))
@@ -836,7 +849,8 @@ def run_protocol(m, prot, arms, modes):
             t = tag_for(m, prot, arm)
             env = dict(os.environ, CUDA_VISIBLE_DEVICES=str(g))
             log = open(f"{LOGS}/{t}__infer.log", "w")
-            procs.append((arm, t, subprocess.Popen(bench_cmd("python", m, prot, arm, modes, ["--infer-only", "--skip-existing"]),
+            procs.append((arm, t, subprocess.Popen(bench_cmd("python", m, prot, arm, arm_modes(arm, modes),
+                                                             ["--infer-only", "--skip-existing"]),
                                                    stdout=log, stderr=subprocess.STDOUT, env=env)))
             print(f"[GPU {g}] inference: {t}")
         for arm, t, p in procs:
@@ -845,7 +859,8 @@ def run_protocol(m, prot, arms, modes):
             assert rc == 0, f"inference failed for {t}: see {LOGS}/{t}__infer.log"
         for arm, t, _ in procs:
             print(f"scoring: {t}")
-            sh(bench_cmd(SCORER, m, prot, arm, modes, ["--eval-only"]), f"{LOGS}/{t}__score.log")
+            sh(bench_cmd(SCORER, m, prot, arm, arm_modes(arm, modes), ["--eval-only", "--fusion-workers", str(FUSION_WORKERS)]),
+               f"{LOGS}/{t}__score.log")
             sh([SCORER, "scripts/lens_eval.py", "views", "--official-src", OFFICIAL_SRC, "--bench-root", BENCH,
                 "--work-root", WORK, "--tag", t, "--datasets", *DATASETS, "--weights", f"official:{m}",
                 "--out", views_path(t)], f"{LOGS}/{t}__views.log")
@@ -882,11 +897,13 @@ if RUN["parity"]:
         for name, c in chk["checks"].items():
             print(("PASS " if c["pass"] else "FAIL ") + name)
         assert chk["all_pass"], f"gate L0 failed for {m}: see {p}"'''),
-    md("""### 1 · Primary protocol: 30% of the views zoomed 2×, five arms, pose + reconstruction
+    md("""### 1 · Primary protocol: 30% of the views zoomed 2×, five arms, pose (+ reconstruction for `RECON_ARMS`)
 Released harness (≤ 100 frames per scene, seed 42, evo + RANSAC, TSDF F1), camera-head poses (API default), reference
 view "first" (never zoomed). Each arm writes a standard record (protocol input `lens:zoom=2,fraction=0.3`); the
 per-view analysis (depth-scale ratio zoomed / normal views, pose AUC on zoom–normal pairs, focal ratio, zoom-estimate
-error) reads the exports before they are deleted."""),
+error) reads the exports before they are deleted. The TSDF F1 (descriptive, ~40–60 min of CPU per arm) is computed
+for `RECON_ARMS` only; every gate uses pose, per-view and meta numbers. Scoring uses `FUSION_WORKERS` parallel fusions
+(from the RAM: 4 ran out of memory on Kaggle)."""),
     code('''if RUN["primary"]:
     for m in MODELS:
         run_protocol(m, PRIMARY, ARMS, MODES.split())'''),
