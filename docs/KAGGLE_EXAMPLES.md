@@ -166,9 +166,10 @@ image in alphabetical order) defines the world frame.
    itself, because Blender 5.3's PLY importer drew our points as streaks). Go to the **Scripting** workspace,
    **Open** `blender_import.py` from the unzipped folder, and click **Run Script**.
 4. You get:
-   - `DA3_points`: the point cloud, shown as coloured points through Geometry Nodes. Use *Material
-     Preview* or *Rendered* shading to see the colours.
-   - `DA3_mesh`: the mesh, hidden by default. Toggle the eye icon in the Outliner.
+   - `DA3_mesh`: the mesh, **visible by default** (since 2026-11-27). Use *Material Preview* or *Rendered*
+     shading to see its colours.
+   - `DA3_points`: the point cloud (coloured points through Geometry Nodes), imported but **hidden by default**:
+     toggle the eye icon in the Outliner, or set `SHOW = "points"` / `"both"` at the top of `blender_import.py`.
    - `DA3_cam_000 …`: one camera per photo, with the photo as background. Select a camera, press
      *Ctrl+Numpad 0* to make it active, then *Numpad 0* to look through it.
    - Camera 0 sits at the origin, looking along +Y, with +Z up.
@@ -209,7 +210,8 @@ The output is H.264 MP4, which plays in PowerPoint, Google Slides and browsers.
     - `seconds`, `resolution`, `background` (`"white"`, `"black"` or `"#RRGGBB"`);
     - `zoom` (larger = closer), `elevation`, `lens`;
     - `point_scale` (bigger points), `crop` (`None` keeps all points);
-    - `show`: `"points"`, `"mesh"` (the filled TSDF surface, true colours) or `"both"`;
+    - `show`: `"mesh"` (default since 2026-11-27: the surface, true colours; points if there is no mesh),
+      `"points"` or `"both"`;
     - `transparent` (PNG frames with alpha).
   - Set `render = False` to preview first: **View → Cameras → Active Camera**, then press **Space**
     to play.

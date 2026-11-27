@@ -2,11 +2,13 @@
 
 Usage, either:
   * Blender > Scripting > open this file > Run Script (it reads the folder it is saved in), or
-  * blender --python blender_import.py -- --dir /path/to/output [--no-mesh] [--no-points] [--point-size 0.004]
+  * blender --python blender_import.py -- --dir /path/to/output [--show mesh|points|both] [--no-mesh] [--no-points]
+    [--point-size 0.004]
 
 Creates:
-  * "DA3_points": the coloured point cloud (points.ply) shown as points via Geometry Nodes,
-  * "DA3_mesh":   the GLB mesh (if present),
+  * "DA3_mesh":   the GLB mesh (if present), VISIBLE by default (SHOW = "mesh"),
+  * "DA3_points": the coloured point cloud (points.ply) shown as points via Geometry Nodes; hidden by default when
+                  a mesh exists (toggle the eye in the Outliner, or SHOW = "points" / "both"),
   * "DA3_cam_XXX": one camera per input view, with the input photo as camera background.
 
 Coordinate conventions:
@@ -26,13 +28,15 @@ import sys
 import bpy
 from mathutils import Matrix
 
+SHOW = "mesh"   # what is visible after the import: "mesh" | "points" | "both" (points are used if there is no mesh)
+
 R_W = Matrix(((1, 0, 0, 0), (0, 0, 1, 0), (0, -1, 0, 0), (0, 0, 0, 1)))
 CV_TO_GL = Matrix(((1, 0, 0, 0), (0, -1, 0, 0), (0, 0, -1, 0), (0, 0, 0, 1)))
 
 
 def parse_args():
     argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
-    opts = {"dir": None, "mesh": True, "points": True, "point_size": None}
+    opts = {"dir": None, "mesh": True, "points": True, "point_size": None, "show": SHOW}
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -44,6 +48,8 @@ def parse_args():
             opts["points"] = False
         elif a == "--point-size":
             opts["point_size"], i = float(argv[i + 1]), i + 1
+        elif a == "--show":
+            opts["show"], i = argv[i + 1], i + 1
         i += 1
     if opts["dir"] is None:
         # Run from Blender's Text Editor, __file__ is only the text-block name ("\blender_import.py"),
@@ -188,6 +194,7 @@ def main():
     spread = max(max((c - centers[0]).length for c in centers), 1e-3)
     scale = spread if len(centers) > 1 else 1.0
 
+    pts, meshes = None, []
     if o["points"] and os.path.exists(os.path.join(d, "points.ply")):
         pts = import_ply(os.path.join(d, "points.ply"))
         if pts is not None:
@@ -199,7 +206,16 @@ def main():
         bpy.ops.import_scene.gltf(filepath=os.path.join(d, "mesh.glb"))
         for ob in set(bpy.data.objects) - before:
             ob.name = "DA3_mesh"
-            ob.hide_set(o["points"])                # hidden when points are shown; toggle in the outliner
+            meshes.append(ob)
+    # visibility (viewport and render): the mesh by default; the points when asked for, or when there is no mesh
+    show_mesh = o["show"] in ("mesh", "both") and bool(meshes)
+    show_points = o["show"] in ("points", "both") or not show_mesh
+    for ob in meshes:
+        ob.hide_set(not show_mesh)
+        ob.hide_render = not show_mesh
+    if pts is not None:
+        pts.hide_set(not show_points)               # still imported: toggle the eye in the Outliner to see it
+        pts.hide_render = not show_points
 
     cams = []
     for i, f in enumerate(meta["frames"]):

@@ -22,7 +22,8 @@ Usage, either:
       blender -b --python blender_import.py --python blender_turntable.py -- --dir <folder> [options]
     options: --mode auto|orbit|arc|inside  --seconds 8  --fps 30  --resolution 1920x1080
              --background white|black|#RRGGBB  --transparent  --elevation 20  --zoom 1.2  --lens 35
-             --point-scale 1.0  --crop 2.0  --show points|mesh|both  --samples 16  --no-render
+             --point-scale 1.0  --crop 2.0  --show mesh|points|both  --samples 16  --no-render
+    default: the mesh (DA3_mesh); the points are rendered only with --show points / both, or when there is no mesh
 
 What it does to look good on any scene:
   * points farther than `crop` x the 90th-percentile distance from the median are hidden (sky
@@ -60,7 +61,7 @@ CONFIG = {
     "elevation": None,          # camera height in degrees; None = per mode (orbit 20, arc 12, inside -5)
     "zoom": 1.0,                # orbit / arc: 1 = the whole subject (97% of its points) fits; larger = closer
     "lens": None,               # focal length in mm (36 mm sensor); None = per mode (35, or 18 inside)
-    "show": "points",           # "points" | "mesh" (filled TSDF surface, true colours) | "both"
+    "show": "mesh",             # "mesh" (the surface, true colours; points if there is no mesh) | "points" | "both"
     "point_scale": 1.0,         # multiplies the automatic point size
     "crop": 2.0,                # hide points farther than crop x the subject size (None = keep all)
     "samples": 16,              # EEVEE samples per frame (more = smoother, slower)
@@ -509,18 +510,8 @@ def main():
     med = np.median(P, axis=0)
     r90 = max(float(np.percentile(np.linalg.norm(P - med, axis=1), 90)), 1e-6)
     crop = cfg["crop"] * r90 if cfg["crop"] else None
-    keep = P if crop is None else P[np.linalg.norm(P - med, axis=1) <= crop]
-    # framing: middle of the subject and the size that keeps all of it (97%) in the picture
-    center, size = subject_frame(keep)
-    info = analyse(keep, *photo_cameras(), center=center, radius=size)
-    if cfg["mode"] in MODE_DEFAULTS and cfg["mode"] != info["mode"]:
-        if cfg["mode"] == "inside" and "origin" not in info:
-            info["origin"] = info["center"]
-        info["why"] = f"forced by CONFIG (auto would be {info['mode']}: {info['why']})"
-        info["mode"] = cfg["mode"]
-        if info["mode"] == "inside" and "coverage" not in info:
-            info["coverage"] = 2 * math.pi
-    cam, cam_start, hfov, frames, motion = build_rig(scene, info, cfg)
+    dist_med = np.linalg.norm(P - med, axis=1)
+    keep = P if crop is None else P[dist_med <= crop]
 
     if cfg["show"] not in ("points", "mesh", "both"):
         print(f"[turntable] unknown show={cfg['show']!r}: using 'points'")
@@ -531,6 +522,28 @@ def main():
         cfg["show"] = "points"
     if cfg["show"] in ("mesh", "both"):
         style_mesh(meshes)
+
+    # framing: middle of the subject and the size that keeps all of it in the picture. The crop hides points only;
+    # when the mesh is shown, a tight crop would also cut thin tall parts (a statue on top) out of the framing, so
+    # the framing then uses a looser one (2 x the 90th-percentile distance, the script's default)
+    frame_crop = crop if cfg["show"] == "points" or crop is None else max(cfg["crop"], 2.0) * r90
+    frame_pts = P if frame_crop is None else P[dist_med <= frame_crop]
+    center, size = subject_frame(frame_pts)
+    info = analyse(frame_pts, *photo_cameras(), center=center, radius=size)
+    if info["mode"] != "inside":
+        # the top of the subject along the up axis must fit too (few points, so the 97th percentile can miss it)
+        top = float(np.percentile((frame_pts - center) @ np.asarray(info["up"], np.float64), 99.5))
+        if 1.05 * top > info["radius"]:
+            print(f"[turntable] framing enlarged to keep the top in the picture: {info['radius']:.3f} -> {1.05 * top:.3f}")
+            info["radius"] = 1.05 * top
+    if cfg["mode"] in MODE_DEFAULTS and cfg["mode"] != info["mode"]:
+        if cfg["mode"] == "inside" and "origin" not in info:
+            info["origin"] = info["center"]
+        info["why"] = f"forced by CONFIG (auto would be {info['mode']}: {info['why']})"
+        info["mode"] = cfg["mode"]
+        if info["mode"] == "inside" and "coverage" not in info:
+            info["coverage"] = 2 * math.pi
+    cam, cam_start, hfov, frames, motion = build_rig(scene, info, cfg)
 
     spacing = median_spacing(keep, n_total * len(keep) / max(len(P), 1))
     footprint = photo_pixel_footprint(keep, photo_cameras()[0], d)
